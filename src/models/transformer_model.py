@@ -1,6 +1,5 @@
 import torch
 import torch.nn as nn
-import torch.optim as optim
 import numpy as np
 
 class EnergyTransformer(nn.Module):
@@ -29,7 +28,7 @@ class EnergyTransformer(nn.Module):
         x = self.input_projection(x)
         x = self.pos_encoder(x)
         x = self.transformer(x)
-        x = x[:, -1, :]  # Take last sequence output
+        x = x[:, -1, :]
         return self.output_layers(x)
 
 class PositionalEncoding(nn.Module):
@@ -38,8 +37,7 @@ class PositionalEncoding(nn.Module):
         
         pe = torch.zeros(max_length, d_model)
         position = torch.arange(0, max_length, dtype=torch.float).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, d_model, 2).float() * 
-                           (-np.log(10000.0) / d_model))
+        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-np.log(10000.0) / d_model))
         
         pe[:, 0::2] = torch.sin(position * div_term)
         pe[:, 1::2] = torch.cos(position * div_term)
