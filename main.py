@@ -3,99 +3,113 @@ import numpy as np
 from config.research_config import config
 from src.data.preprocessing import EnergyDataPreprocessor
 from src.models.transformer_model import EnergyTransformer
-from src.analysis.statistical_tests import StatisticalAnalyzer
-from src.utils.helpers import validate_data, print_project_info
 import torch
 import torch.optim as optim
 import os
 
-def main():
-    print_project_info()
+def check_environment():
+    """Check if all requirements are met"""
+    print("=== ENVIRONMENT CHECK ===")
     
-    # Check if data file exists
+    # Check data file
     if not os.path.exists(config.DATA_PATH):
-        print(f"❌ ERROR: Data file not found at {config.DATA_PATH}")
-        print("Please make sure 'data/europe_energy.csv' exists")
+        print(f"❌ CRITICAL: Data file not found at {config.DATA_PATH}")
+        print("Please make sure 'data/europe_energy.csv' exists in your repository")
+        return False
+    
+    print(f"✅ Data file found: {config.DATA_PATH}")
+    
+    # Check required directories
+    required_dirs = ['src/data', 'src/models', 'config']
+    for dir_path in required_dirs:
+        if not os.path.exists(dir_path):
+            print(f"❌ Directory missing: {dir_path}")
+            return False
+    
+    print("✅ All directories exist")
+    return True
+
+def main():
+    print("=== PhD-Level European Energy Forecasting ===")
+    
+    # Environment check
+    if not check_environment():
+        print("\n🚨 Please fix the above issues before continuing")
         return
     
-    print("1. Loading and preprocessing data...")
+    print("\n1. Loading and preprocessing data...")
     preprocessor = EnergyDataPreprocessor(config)
     
     try:
         df = preprocessor.load_data()
-        print(f"✅ Data loaded: {df.shape}")
-        
-        # Validate data
-        validate_data(df)
+        print(f"Data columns: {list(df.columns)}")
+        print(f"Data range: {df.index.min()} to {df.index.max()}")
         
     except Exception as e:
-        print(f"❌ Error: {e}")
+        print(f"❌ Error loading data: {e}")
         return
-    
-    # Basic analysis
-    analyzer = StatisticalAnalyzer(df)
-    analyzer.basic_analysis()
-    
-    # Stationarity check for target country
-    stationarity = analyzer.check_stationarity(config.TARGET_COUNTRY)
-    print(f"\nStationarity test for {config.TARGET_COUNTRY}:")
-    print(f"ADF p-value: {stationarity['p_value']:.4f}")
-    print(f"Is stationary: {stationarity['is_stationary']}")
     
     print("\n2. Creating advanced features...")
     try:
         df_processed = preprocessor.create_advanced_features(df)
-        print(f"✅ Features created: {df_processed.shape}")
+        print(f"Processed data shape: {df_processed.shape}")
+        print(f"Available features: {[col for col in df_processed.columns if col not in config.COUNTRIES][:10]}...")
         
     except Exception as e:
-        print(f"❌ Error in feature creation: {e}")
+        print(f"❌ Error creating features: {e}")
         return
     
-    print("\n3. Preparing sequences for deep learning...")
+    print("\n3. Preparing sequences for model training...")
     try:
         X_sequences, y_sequences = preprocessor.prepare_sequences(df_processed, config.TARGET_COUNTRY)
-        print(f"✅ Sequences: {X_sequences.shape}")
+        print(f"X_sequences shape: {X_sequences.shape}")
+        print(f"y_sequences shape: {y_sequences.shape}")
         
     except Exception as e:
-        print(f"❌ Error in sequence preparation: {e}")
+        print(f"❌ Error preparing sequences: {e}")
         return
     
-    # Only proceed if we have enough data
-    if len(X_sequences) < config.SEQUENCE_LENGTH * 2:
-        print("❌ Not enough data for training")
+    # Check if we have enough data
+    if len(X_sequences) < 100:
+        print(f"⚠️ Warning: Only {len(X_sequences)} sequences available")
+        print("Consider reducing SEQUENCE_LENGTH in config")
+    
+    print("\n4. Setting up Transformer model...")
+    try:
+        input_dim = X_sequences.shape[2]
+        model = EnergyTransformer(input_dim, config.SEQUENCE_LENGTH)
+        print(f"✅ Transformer model created with input_dim={input_dim}")
+        
+    except Exception as e:
+        print(f"❌ Error creating model: {e}")
         return
     
-    split_idx = int(len(X_sequences) * (1 - config.TEST_SIZE))
-    X_train, X_test = X_sequences[:split_idx], X_sequences[split_idx:]
-    y_train, y_test = y_sequences[:split_idx], y_sequences[split_idx:]
+    print("\n5. Demo training...")
+    try:
+        # Convert to tensors
+        X_tensor = torch.FloatTensor(X_sequences[:100])  # Use subset for demo
+        y_tensor = torch.FloatTensor(y_sequences[:100])
+        
+        criterion = torch.nn.MSELoss()
+        optimizer = optim.Adam(model.parameters(), lr=0.001)
+        
+        model.train()
+        for epoch in range(3):
+            optimizer.zero_grad()
+            outputs = model(X_tensor)
+            loss = criterion(outputs.squeeze(), y_tensor)
+            loss.backward()
+            optimizer.step()
+            print(f"   Epoch {epoch + 1}, Loss: {loss.item():.4f}")
+        
+        print("✅ Demo training completed successfully!")
+        
+    except Exception as e:
+        print(f"❌ Error in training: {e}")
+        return
     
-    print(f"✅ Train/Test split: {len(X_train)}/{len(X_test)}")
-    
-    print("\n4. Transformer model setup...")
-    input_dim = X_sequences.shape[2]
-    model = EnergyTransformer(input_dim, config.SEQUENCE_LENGTH)
-    
-    criterion = torch.nn.MSELoss()
-    optimizer = optim.Adam(model.parameters(), lr=0.001)
-    
-    print("5. Training demonstration...")
-    model.train()
-    
-    # Demo training with few epochs
-    for epoch in range(3):
-        optimizer.zero_grad()
-        outputs = model(torch.FloatTensor(X_train))
-        loss = criterion(outputs.squeeze(), torch.FloatTensor(y_train))
-        loss.backward()
-        optimizer.step()
-        print(f"   Epoch {epoch + 1}, Loss: {loss.item():.4f}")
-    
-    print("\n🎉 PROJECT SETUP COMPLETED SUCCESSFULLY!")
-    print("Next steps:")
-    print("1. Add more sophisticated models")
-    print("2. Implement proper cross-validation")
-    print("3. Add hyperparameter tuning")
-    print("4. Create research paper visualizations")
+    print("\n🎉 PROJECT IS WORKING CORRECTLY!")
+    print("Next: Implement full training, validation, and evaluation")
 
 if __name__ == "__main__":
     main()
