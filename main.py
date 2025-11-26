@@ -1,90 +1,47 @@
-import os
-import sys
-
-sys.path.append('src')
+# اضافه کردن این imports
+from src.analysis.carbon_impact import CarbonImpactAnalyzer
+from src.analysis.renewable_integration import RenewableIntegrationAnalyzer
+from src.analysis.economic_analysis import EconomicAnalyzer
 
 def main():
-    print("🎯 European Energy Forecasting - REAL Dataset")
-    print("=" * 60)
-    print("📁 Using: time_series_60min_singleindex.csv (124MB)")
+    # ... کدهای قبلی ...
+    
+    # ۶. Environmental and Economic Impact Analysis
+    print("\n6. Calculating Environmental and Economic Impact...")
+    
+    # Carbon impact
+    carbon_analyzer = CarbonImpactAnalyzer()
+    carbon_impact = carbon_analyzer.calculate_carbon_reduction(df, improvement)
+    
+    # Renewable integration
+    renewable_analyzer = RenewableIntegrationAnalyzer()
+    renewable_analysis = renewable_analyzer.analyze_renewable_integration(df, 'DE')
+    
+    # Economic analysis
+    economic_analyzer = EconomicAnalyzer()
+    economic_impact = economic_analyzer.calculate_economic_savings(
+        df, improvement, 
+        carbon_impact['annual_co2_reduction_tons'] if carbon_impact else 0
+    )
+    
+    # ۷. Display Comprehensive Results
+    print(f"\n" + "=" * 60)
+    print(f"🌍 ENVIRONMENTAL & ECONOMIC IMPACT ANALYSIS")
     print("=" * 60)
     
-    try:
-        from data_collection.data_loader import (
-            download_real_dataset, 
-            manual_download_instructions,
-            check_existing_file
-        )
-        from models.real_improvement_calculator import RealImprovementCalculator
-        
-        # 1. First check if file already exists from manual download
-        print("1. Checking for existing dataset...")
-        df = check_existing_file()
-        
-        if df is None:
-            # 2. Try automated download
-            print("\n2. Attempting automated download...")
-            df = download_real_dataset()
-        
-        if df is None:
-            # 3. Show manual instructions
-            print("\n❌ Automated download failed")
-            manual_download_instructions()
-            return
-        
-        # 4. Dataset loaded successfully - now calculate improvement
-        print(f"\n3. Dataset ready: {df.shape}")
-        print(f"   Memory: {df.memory_usage(deep=True).sum() / 1024 / 1024:.1f} MB")
-        
-        # 5. Find the right target column
-        print("\n4. Finding energy load columns...")
-        load_columns = [col for col in df.columns if 'load' in col.lower()]
-        print(f"   Found {len(load_columns)} load-related columns")
-        print(f"   First 5: {load_columns[:5]}")
-        
-        # 6. Calculate improvement
-        calculator = RealImprovementCalculator()
-        
-        # Try different target columns
-        target_candidates = [
-            'DE_load_actual_entsoe_transparency',
-            'load_DE',
-            'DE_load'
-        ] + load_columns[:3]  # Try first 3 load columns
-        
-        improvement = None
-        for target_col in target_candidates:
-            if target_col in df.columns:
-                print(f"🎯 Trying target: {target_col}")
-                improvement = calculator.calculate_real_improvement(df, target_col)
-                if improvement is not None:
-                    break
-        
-        if improvement is None and len(load_columns) > 0:
-            # Use first available load column
-            target_col = load_columns[0]
-            print(f"🎯 Using first load column: {target_col}")
-            improvement = calculator.calculate_real_improvement(df, target_col)
-        
-        if improvement is None:
-            print("❌ Could not calculate improvement from any column")
-            return
-        
-        # 7. Show results
-        results = calculator.get_detailed_results()
-        print(f"\n" + "=" * 50)
-        print(f"🎯 REAL RESULTS:")
-        print(f"   Dataset: {df.shape[0]:,} records, {df.shape[1]} features")
-        print(f"   Baseline MAE: {results['baseline_mae']:.2f}")
-        print(f"   Advanced MAE: {results['advanced_mae']:.2f}")
-        print(f"   Improvement: {results['improvement_percentage']:+.1f}%")
-        print(f"   ✅ REAL calculation from YOUR data!")
-        print("=" * 50)
-        
-    except Exception as e:
-        print(f"❌ Error: {e}")
-        import traceback
-        traceback.print_exc()
-
-if __name__ == "__main__":
-    main()
+    if carbon_impact:
+        print(f"📊 Carbon Reduction (Germany):")
+        print(f"   Annual CO2 reduction: {carbon_impact['annual_co2_reduction_tons']:,.0f} tons")
+        print(f"   Equivalent to: {carbon_impact['equivalent_cars_removed']:,.0f} cars removed")
+        print(f"   Or: {carbon_impact['equivalent_trees_planted']:,.0f} trees planted")
+    
+    if economic_impact:
+        print(f"💰 Economic Impact:")
+        print(f"   Annual savings: €{economic_impact['total_annual_savings_eur']:,.0f}")
+        print(f"   Payback period: {economic_impact['payback_period_years']:.1f} years")
+        print(f"   ROI: {economic_impact['roi_percentage']:.1f}%")
+    
+    if renewable_analysis:
+        print(f"🌱 Renewable Integration:")
+        for source, data in renewable_analysis['renewable_sources'].items():
+            print(f"   {source.title()}: {data['penetration_percentage']:.1f}% penetration")
