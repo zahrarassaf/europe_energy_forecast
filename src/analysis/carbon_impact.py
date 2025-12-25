@@ -1,8 +1,3 @@
-"""
-Carbon Impact Analysis Module
-Calculates carbon reduction potential from energy efficiency improvements.
-"""
-
 import pandas as pd
 import numpy as np
 from datetime import timedelta
@@ -19,15 +14,23 @@ class CarbonImpactAnalyzer:
         }
     
     def calculate_carbon_reduction(self, df, improvement, country_code='DE'):
-        """Calculate carbon reduction from energy efficiency improvement."""
         try:
-            load_col = self._find_load_column(df, country_code)
-            if not load_col:
-                return self._get_default_values()
+            load_col = f"{country_code.lower()}_load_actual_entsoe_transparency"
+            if load_col not in df.columns:
+                load_cols = [col for col in df.columns if 'load_actual' in col]
+                if load_cols:
+                    load_col = load_cols[0]
+                else:
+                    return self._get_default_values()
             
             avg_consumption = df[load_col].mean()
             avg_co2 = self.co2_intensity_by_country.get(country_code, 300)
-            hours_per_year = self._get_hours_per_year(df)
+            
+            if isinstance(df.index, pd.DatetimeIndex) and len(df.index) > 1:
+                time_diff = df.index[1] - df.index[0]
+                hours_per_year = 8760 if time_diff == timedelta(hours=1) else 365
+            else:
+                hours_per_year = 8760
             
             annual_energy_savings = avg_consumption * improvement * hours_per_year
             annual_co2_reduction = (annual_energy_savings * avg_co2 * 1000) / 1000000
@@ -41,28 +44,10 @@ class CarbonImpactAnalyzer:
                 'co2_intensity_gco2_kwh': avg_co2
             }
             
-        except Exception as e:
-            print(f"Error in carbon calculation: {e}")
+        except Exception:
             return self._get_default_values()
     
-    def _find_load_column(self, df, country_code):
-        """Find load column for a country."""
-        target_col = f"{country_code.lower()}_load_actual_entsoe_transparency"
-        if target_col in df.columns:
-            return target_col
-        
-        load_cols = [col for col in df.columns if 'load_actual' in col]
-        return load_cols[0] if load_cols else None
-    
-    def _get_hours_per_year(self, df):
-        """Determine hours per year based on data frequency."""
-        if isinstance(df.index, pd.DatetimeIndex) and len(df.index) > 1:
-            time_diff = df.index[1] - df.index[0]
-            return 8760 if time_diff == timedelta(hours=1) else 365
-        return 8760
-    
     def _get_default_values(self):
-        """Return default values in case of error."""
         return {
             'annual_co2_reduction_tons': 50000,
             'equivalent_cars_removed': 10870,
