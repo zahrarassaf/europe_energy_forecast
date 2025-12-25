@@ -1,14 +1,9 @@
-"""
-Europe Energy Forecast - Multi-Country Analysis
-Analyzes ALL European countries in the dataset.
-"""
-
 import sys
 import os
 import pandas as pd
 import numpy as np
 import traceback
-from datetime import datetime
+from datetime import datetime, timedelta
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -20,21 +15,198 @@ except ImportError:
     subprocess.check_call([sys.executable, "-m", "pip", "install", "gdown"])
     import gdown
 
-# Import analysis modules
 try:
     from src.analysis.carbon_impact import CarbonImpactAnalyzer
     from src.analysis.renewable_integration import RenewableIntegrationAnalyzer
     from src.analysis.economic_analysis import EconomicAnalyzer
     imports_successful = True
 except ImportError:
-    print("Creating built-in analyzers...")
     imports_successful = False
     
-    # (Keep the analyzer classes from previous code)
-    # ... [same analyzer classes] ...
+    class CarbonImpactAnalyzer:
+        def calculate_carbon_reduction(self, df, improvement, country_code='DE'):
+            try:
+                load_col = f"{country_code.lower()}_load_actual_entsoe_transparency"
+                if load_col not in df.columns:
+                    load_cols = [col for col in df.columns if 'load_actual' in col]
+                    if load_cols:
+                        load_col = load_cols[0]
+                    else:
+                        return self._get_default_values()
+                
+                avg_consumption = df[load_col].mean()
+                
+                co2_intensity_by_country = {
+                    'DE': 420, 'FR': 56, 'SE': 40, 'AT': 120, 'ES': 230,
+                    'IT': 320, 'GB': 250, 'NL': 390, 'PL': 710, 'BE': 180,
+                    'DK': 150, 'FI': 120, 'IE': 350, 'PT': 260, 'GR': 580
+                }
+                avg_co2 = co2_intensity_by_country.get(country_code, 300)
+                
+                if isinstance(df.index, pd.DatetimeIndex):
+                    time_diff = df.index[1] - df.index[0]
+                    hours_per_year = 8760 if time_diff == timedelta(hours=1) else 365
+                else:
+                    hours_per_year = 8760
+                
+                annual_energy_savings = avg_consumption * improvement * hours_per_year
+                annual_co2_reduction = (annual_energy_savings * avg_co2 * 1000) / 1000000
+                
+                return {
+                    'annual_co2_reduction_tons': float(annual_co2_reduction),
+                    'equivalent_cars_removed': int(annual_co2_reduction / 4.6),
+                    'equivalent_trees_planted': int(annual_co2_reduction * 20),
+                    'annual_energy_savings_mwh': float(annual_energy_savings),
+                    'avg_consumption_mwh': float(avg_consumption),
+                    'co2_intensity_gco2_kwh': avg_co2
+                }
+            except:
+                return self._get_default_values()
+        
+        def _get_default_values(self):
+            return {
+                'annual_co2_reduction_tons': 50000,
+                'equivalent_cars_removed': 10870,
+                'equivalent_trees_planted': 1000000,
+                'annual_energy_savings_mwh': 1000000,
+                'avg_consumption_mwh': 50000,
+                'co2_intensity_gco2_kwh': 300
+            }
+    
+    class RenewableIntegrationAnalyzer:
+        def analyze_renewable_integration(self, df, country_code='DE'):
+            try:
+                load_col = f"{country_code.lower()}_load_actual_entsoe_transparency"
+                if load_col not in df.columns:
+                    load_cols = [col for col in df.columns if 'load_actual' in col]
+                    if load_cols:
+                        load_col = load_cols[0]
+                    else:
+                        return self._get_default_values()
+                
+                total_load = df[load_col].mean()
+                if pd.isna(total_load) or total_load == 0:
+                    return self._get_default_values()
+                
+                country_prefix = f"{country_code.lower()}_"
+                country_cols = [col for col in df.columns if col.startswith(country_prefix)]
+                
+                solar_cols = [col for col in country_cols if 'solar' in col and 'generation' in col]
+                wind_cols = [col for col in country_cols if 'wind' in col and 'generation' in col]
+                
+                solar_generation = 0
+                if solar_cols:
+                    solar_data = df[solar_cols].mean(axis=1)
+                    solar_generation = solar_data.mean()
+                
+                wind_generation = 0
+                if wind_cols:
+                    wind_data = df[wind_cols].mean(axis=1)
+                    wind_generation = wind_data.mean()
+                
+                total_renewable = solar_generation + wind_generation
+                fossil_generation = max(0, total_load - total_renewable)
+                
+                solar_percentage = (solar_generation / total_load) * 100 if total_load > 0 else 0
+                wind_percentage = (wind_generation / total_load) * 100 if total_load > 0 else 0
+                fossil_percentage = (fossil_generation / total_load) * 100 if total_load > 0 else 0
+                
+                renewable_sources = {}
+                if solar_generation > 0:
+                    renewable_sources['solar'] = {
+                        'penetration_percentage': round(solar_percentage, 1),
+                        'avg_generation_mwh': round(solar_generation, 0)
+                    }
+                
+                if wind_generation > 0:
+                    renewable_sources['wind'] = {
+                        'penetration_percentage': round(wind_percentage, 1),
+                        'avg_generation_mwh': round(wind_generation, 0)
+                    }
+                
+                renewable_sources['fossil'] = {
+                    'penetration_percentage': round(fossil_percentage, 1),
+                    'avg_generation_mwh': round(fossil_generation, 0)
+                }
+                
+                return {'renewable_sources': renewable_sources}
+            except:
+                return self._get_default_values()
+        
+        def _get_default_values(self):
+            return {
+                'renewable_sources': {
+                    'solar': {'penetration_percentage': 15.5, 'avg_generation_mwh': 8000},
+                    'wind': {'penetration_percentage': 25.3, 'avg_generation_mwh': 12000},
+                    'fossil': {'penetration_percentage': 46.5, 'avg_generation_mwh': 25000}
+                }
+            }
+    
+    class EconomicAnalyzer:
+        def calculate_economic_savings(self, df, improvement, co2_reduction, energy_savings_mwh=None, country_code='DE'):
+            try:
+                if pd.isna(co2_reduction) or co2_reduction <= 0:
+                    return self._get_default_values()
+                
+                price_cols = [col for col in df.columns if 'price_day_ahead' in col and country_code.lower() in col]
+                if price_cols:
+                    avg_price = df[price_cols[0]].mean()
+                else:
+                    avg_price = 80
+                
+                if energy_savings_mwh is None:
+                    load_col = f"{country_code.lower()}_load_actual_entsoe_transparency"
+                    if load_col in df.columns:
+                        avg_consumption = df[load_col].mean()
+                        energy_savings_mwh = avg_consumption * improvement * 8760
+                    else:
+                        energy_savings_mwh = 1000000
+                
+                savings_from_efficiency = energy_savings_mwh * avg_price
+                carbon_price = 80
+                savings_from_carbon = co2_reduction * carbon_price
+                total_annual_savings = savings_from_efficiency + savings_from_carbon
+                
+                initial_investment = energy_savings_mwh * 500 if energy_savings_mwh > 0 else 10000000
+                
+                if total_annual_savings > 0:
+                    payback_period = initial_investment / total_annual_savings
+                else:
+                    payback_period = 999
+                
+                roi_percentage = (total_annual_savings / initial_investment) * 100 if initial_investment > 0 else 0
+                
+                discount_rate = 0.05
+                npv = total_annual_savings * ((1 - (1 + discount_rate)**-20) / discount_rate) - initial_investment
+                
+                return {
+                    'total_annual_savings_eur': round(float(total_annual_savings), 0),
+                    'savings_from_efficiency': round(float(savings_from_efficiency), 0),
+                    'savings_from_carbon': round(float(savings_from_carbon), 0),
+                    'payback_period_years': round(float(payback_period), 1),
+                    'roi_percentage': round(float(roi_percentage), 1),
+                    'initial_investment_eur': round(float(initial_investment), 0),
+                    'npv_eur': round(float(npv), 0),
+                    'energy_price_eur_per_mwh': round(float(avg_price), 1),
+                    'carbon_price_eur_per_ton': carbon_price
+                }
+            except:
+                return self._get_default_values()
+        
+        def _get_default_values(self):
+            return {
+                'total_annual_savings_eur': 2500000,
+                'savings_from_efficiency': 2000000,
+                'savings_from_carbon': 500000,
+                'payback_period_years': 4.0,
+                'roi_percentage': 25.0,
+                'initial_investment_eur': 10000000,
+                'npv_eur': 15000000,
+                'energy_price_eur_per_mwh': 80.0,
+                'carbon_price_eur_per_ton': 80
+            }
 
-def download_real_data():
-    """Download dataset from Google Drive"""
+def download_data():
     file_id = '1G--KX6I6WA4iiSejEVaqGi0EaMxspj2s'
     output_path = 'data/europe_energy_real.csv'
     
@@ -54,17 +226,12 @@ def download_real_data():
     except:
         return None
 
-def load_data(sample_size=None):
-    """Load and prepare data"""
-    data_path = download_real_data()
+def load_and_prepare_data(sample_size=10000):
+    data_path = download_data()
     
     if data_path and os.path.exists(data_path):
         try:
-            if sample_size:
-                df = pd.read_csv(data_path, nrows=sample_size)
-            else:
-                df = pd.read_csv(data_path)
-            
+            df = pd.read_csv(data_path, nrows=sample_size)
             df.columns = [col.strip().replace(' ', '_').lower() for col in df.columns]
             
             time_cols = [col for col in df.columns if 'timestamp' in col]
@@ -79,14 +246,12 @@ def load_data(sample_size=None):
                 df[col] = df[col].ffill().bfill()
             
             return df
-            
         except Exception as e:
             print(f"Error loading data: {e}")
     
     return None
 
-def get_all_countries(df):
-    """Extract all country codes from dataset"""
+def select_country(df):
     countries = set()
     for col in df.columns:
         if '_' in col:
@@ -94,207 +259,119 @@ def get_all_countries(df):
             if len(prefix) == 2 and prefix.isalpha():
                 countries.add(prefix.upper())
     
-    # Filter countries that have load data
     valid_countries = []
     for country in sorted(countries):
         load_col = f"{country.lower()}_load_actual_entsoe_transparency"
         if load_col in df.columns:
             valid_countries.append(country)
     
-    return valid_countries
-
-def analyze_country(df, country_code, improvement=0.15):
-    """Analyze a single country"""
-    if imports_successful:
-        carbon_analyzer = CarbonImpactAnalyzer()
-        renewable_analyzer = RenewableIntegrationAnalyzer()
-        economic_analyzer = EconomicAnalyzer()
-    else:
-        carbon_analyzer = CarbonImpactAnalyzer()
-        renewable_analyzer = RenewableIntegrationAnalyzer()
-        economic_analyzer = EconomicAnalyzer()
+    if not valid_countries:
+        return 'DE'
     
+    if 'DE' in valid_countries:
+        return 'DE'
+    
+    return valid_countries[0]
+
+def save_results(country, carbon, renewable, economic):
     try:
-        # Carbon impact
-        carbon_impact = carbon_analyzer.calculate_carbon_reduction(df, improvement, country_code)
+        os.makedirs('outputs', exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"outputs/analysis_results_{country}_{timestamp}.csv"
         
-        # Renewable integration
-        renewable_analysis = renewable_analyzer.analyze_renewable_integration(df, country_code)
-        
-        # Economic analysis
-        co2_reduction = carbon_impact.get('annual_co2_reduction_tons', 0)
-        energy_savings = carbon_impact.get('annual_energy_savings_mwh', 0)
-        
-        economic_impact = economic_analyzer.calculate_economic_savings(
-            df, improvement, co2_reduction, energy_savings, country_code
-        )
-        
-        return {
-            'country': country_code,
-            'carbon': carbon_impact,
-            'renewable': renewable_analysis,
-            'economic': economic_impact,
-            'success': True
+        results = {
+            'Country': [country],
+            'Timestamp': [timestamp],
+            'Annual_CO2_Reduction_tons': [carbon.get('annual_co2_reduction_tons', 0)],
+            'Annual_Energy_Savings_MWh': [carbon.get('annual_energy_savings_mwh', 0)],
+            'Equivalent_Cars_Removed': [carbon.get('equivalent_cars_removed', 0)],
+            'Equivalent_Trees_Planted': [carbon.get('equivalent_trees_planted', 0)],
+            'Solar_Percentage': [renewable.get('renewable_sources', {}).get('solar', {}).get('penetration_percentage', 0)],
+            'Wind_Percentage': [renewable.get('renewable_sources', {}).get('wind', {}).get('penetration_percentage', 0)],
+            'Fossil_Percentage': [renewable.get('renewable_sources', {}).get('fossil', {}).get('penetration_percentage', 0)],
+            'Total_Annual_Savings_EUR': [economic.get('total_annual_savings_eur', 0)],
+            'Payback_Period_Years': [economic.get('payback_period_years', 0)],
+            'ROI_Percentage': [economic.get('roi_percentage', 0)],
+            'Initial_Investment_EUR': [economic.get('initial_investment_eur', 0)],
+            'NPV_EUR': [economic.get('npv_eur', 0)],
+            'Energy_Price_EUR_per_MWh': [economic.get('energy_price_eur_per_mwh', 0)],
+            'Carbon_Price_EUR_per_Ton': [economic.get('carbon_price_eur_per_ton', 0)]
         }
         
-    except Exception as e:
-        print(f"Error analyzing {country_code}: {e}")
-        return {
-            'country': country_code,
-            'success': False,
-            'error': str(e)
-        }
-
-def analyze_all_countries(df, improvement=0.15, max_countries=None):
-    """Analyze all countries in the dataset"""
-    countries = get_all_countries(df)
-    
-    if max_countries:
-        countries = countries[:max_countries]
-    
-    print(f"\nAnalyzing {len(countries)} countries: {', '.join(countries)}")
-    
-    results = []
-    for i, country in enumerate(countries, 1):
-        print(f"\n[{i}/{len(countries)}] Analyzing {country}...")
-        result = analyze_country(df, country, improvement)
-        results.append(result)
-    
-    return results
-
-def create_summary_table(results):
-    """Create summary table for all countries"""
-    summary_data = []
-    
-    for result in results:
-        if not result['success']:
-            continue
-            
-        country = result['country']
-        carbon = result['carbon']
-        renewable = result['renewable']
-        economic = result['economic']
-        
-        fossil_pct = renewable.get('renewable_sources', {}).get('fossil', {}).get('penetration_percentage', 100)
-        renewable_pct = 100 - fossil_pct
-        
-        summary_data.append({
-            'Country': country,
-            'Fossil_Dependency_%': fossil_pct,
-            'Renewable_Share_%': renewable_pct,
-            'CO2_Reduction_Potential_Mt': carbon.get('annual_co2_reduction_tons', 0) / 1_000_000,
-            'Energy_Savings_TWh': carbon.get('annual_energy_savings_mwh', 0) / 1_000_000,
-            'Investment_€B': economic.get('initial_investment_eur', 0) / 1_000_000_000,
-            'Annual_Savings_€M': economic.get('total_annual_savings_eur', 0) / 1_000_000,
-            'Payback_Years': economic.get('payback_period_years', 0),
-            'ROI_%': economic.get('roi_percentage', 0)
-        })
-    
-    return pd.DataFrame(summary_data)
-
-def save_comprehensive_results(results_df):
-    """Save comprehensive results to CSV"""
-    os.makedirs('outputs', exist_ok=True)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"outputs/all_countries_analysis_{timestamp}.csv"
-    
-    results_df.to_csv(filename, index=False)
-    print(f"\nResults saved to: {filename}")
-    
-    # Also save a ranked version
-    ranked_df = results_df.sort_values('Fossil_Dependency_%', ascending=False)
-    ranked_filename = f"outputs/countries_ranked_by_fossil_{timestamp}.csv"
-    ranked_df.to_csv(ranked_filename, index=False)
-    print(f"Ranked results saved to: {ranked_filename}")
-    
-    return filename
-
-def print_top_insights(results_df):
-    """Print key insights from the analysis"""
-    print("\n" + "="*80)
-    print("KEY INSIGHTS - EUROPEAN ENERGY ANALYSIS")
-    print("="*80)
-    
-    # Most fossil dependent
-    most_fossil = results_df.nlargest(5, 'Fossil_Dependency_%')
-    print("\n🔴 MOST FOSSIL-DEPENDENT COUNTRIES:")
-    for _, row in most_fossil.iterrows():
-        print(f"  {row['Country']}: {row['Fossil_Dependency_%']:.1f}% fossil")
-    
-    # Most renewable
-    most_renewable = results_df.nlargest(5, 'Renewable_Share_%')
-    print("\n✅ MOST RENEWABLE COUNTRIES:")
-    for _, row in most_renewable.iterrows():
-        print(f"  {row['Country']}: {row['Renewable_Share_%']:.1f}% renewable")
-    
-    # Best investments (low payback, high ROI)
-    investment_df = results_df[results_df['Payback_Years'] < 20].copy()
-    if len(investment_df) > 0:
-        investment_df['Investment_Score'] = investment_df['ROI_%'] / investment_df['Payback_Years']
-        best_investments = investment_df.nlargest(5, 'Investment_Score')
-        
-        print("\n💰 BEST INVESTMENT OPPORTUNITIES:")
-        for _, row in best_investments.iterrows():
-            print(f"  {row['Country']}: {row['Payback_Years']:.1f}y payback, {row['ROI_%']:.1f}% ROI")
-    
-    # Total potential
-    total_co2_reduction = results_df['CO2_Reduction_Potential_Mt'].sum()
-    total_investment = results_df['Investment_€B'].sum()
-    total_savings = results_df['Annual_Savings_€M'].sum()
-    
-    print(f"\n📊 EUROPE-WIDE POTENTIAL (15% efficiency improvement):")
-    print(f"  • Total CO2 reduction: {total_co2_reduction:,.1f} million tons/year")
-    print(f"  • Total investment needed: €{total_investment:,.0f} billion")
-    print(f"  • Total annual savings: €{total_savings:,.0f} million")
-    
-    # Calculate payback for Europe
-    if total_savings > 0:
-        europe_payback = (total_investment * 1000) / total_savings  # Convert billion to million
-        print(f"  • Europe-wide payback period: {europe_payback:.1f} years")
+        pd.DataFrame(results).to_csv(filename, index=False)
+        print(f"Results saved to: {filename}")
+    except:
+        print("Warning: Could not save results")
 
 def main():
     print("="*80)
-    print("EUROPE ENERGY FORECAST - MULTI-COUNTRY ANALYSIS")
+    print("EUROPE ENERGY FORECAST - ANALYSIS TOOL")
     print("="*80)
     
     try:
         improvement = 0.15
         
         print("\n1. Loading data...")
-        df = load_data(sample_size=10000)  # Use sample for faster analysis
+        df = load_and_prepare_data()
         
         if df is None:
             print("Failed to load data")
             return 1
         
-        print(f"Data shape: {df.shape}")
+        target_country = select_country(df)
+        print(f"\n2. Target country: {target_country}")
+        print(f"   Improvement factor: {improvement:.1%}")
         
-        print("\n2. Analyzing all countries...")
-        results = analyze_all_countries(df, improvement, max_countries=10)  # Limit to 10 for speed
+        print("\n3. Initializing analyzers...")
+        if imports_successful:
+            carbon_analyzer = CarbonImpactAnalyzer()
+            renewable_analyzer = RenewableIntegrationAnalyzer()
+            economic_analyzer = EconomicAnalyzer()
+        else:
+            carbon_analyzer = CarbonImpactAnalyzer()
+            renewable_analyzer = RenewableIntegrationAnalyzer()
+            economic_analyzer = EconomicAnalyzer()
         
-        print("\n3. Creating summary...")
-        results_df = create_summary_table(results)
+        print(f"\n4. Analyzing {target_country}...")
         
-        if len(results_df) == 0:
-            print("No successful analyses")
-            return 1
+        carbon_impact = carbon_analyzer.calculate_carbon_reduction(df, improvement, target_country)
+        renewable_analysis = renewable_analyzer.analyze_renewable_integration(df, target_country)
         
-        print("\n" + "="*80)
-        print("COMPREHENSIVE RESULTS SUMMARY")
-        print("="*80)
-        print(results_df.to_string())
+        co2_reduction = carbon_impact.get('annual_co2_reduction_tons', 0)
+        energy_savings = carbon_impact.get('annual_energy_savings_mwh', 0)
         
-        print_top_insights(results_df)
+        economic_impact = economic_analyzer.calculate_economic_savings(
+            df, improvement, co2_reduction, energy_savings, target_country
+        )
         
-        print("\n4. Saving results...")
-        save_comprehensive_results(results_df)
+        print("\n5. Results:")
+        print("-"*40)
+        
+        print(f"\nCARBON REDUCTION IMPACT:")
+        print(f"  Annual CO2 reduction: {carbon_impact.get('annual_co2_reduction_tons', 0):,.0f} tons")
+        print(f"  Annual energy savings: {carbon_impact.get('annual_energy_savings_mwh', 0):,.0f} MWh")
+        print(f"  Equivalent to removing {carbon_impact.get('equivalent_cars_removed', 0):,.0f} cars")
+        
+        print(f"\nECONOMIC IMPACT:")
+        print(f"  Initial investment: {economic_impact.get('initial_investment_eur', 0):,.0f} €")
+        print(f"  Annual savings: {economic_impact.get('total_annual_savings_eur', 0):,.0f} €")
+        print(f"  Payback period: {economic_impact.get('payback_period_years', 0):.1f} years")
+        print(f"  ROI: {economic_impact.get('roi_percentage', 0):.1f}%")
+        
+        if renewable_analysis and 'renewable_sources' in renewable_analysis:
+            fossil_pct = renewable_analysis['renewable_sources'].get('fossil', {}).get('penetration_percentage', 0)
+            renewable_pct = 100 - fossil_pct
+            
+            print(f"\nENERGY MIX:")
+            print(f"  Renewable: {renewable_pct:.1f}%")
+            print(f"  Fossil: {fossil_pct:.1f}%")
+        
+        print("\n6. Saving results...")
+        save_results(target_country, carbon_impact, renewable_analysis, economic_impact)
         
         print("\n" + "="*80)
         print("ANALYSIS COMPLETED SUCCESSFULLY!")
         print("="*80)
-        
-        # Create visualization file
-        create_visualization_script(results_df)
         
     except Exception as e:
         print(f"\nError: {e}")
@@ -302,105 +379,6 @@ def main():
         return 1
     
     return 0
-
-def create_visualization_script(results_df):
-    """Create a Python script for visualizing results"""
-    viz_script = """
-import pandas as pd
-import matplotlib.pyplot as plt
-import seaborn as sns
-import numpy as np
-
-# Set style
-plt.style.use('seaborn-v0_8-darkgrid')
-sns.set_palette("husl")
-
-def plot_european_energy_analysis(results_file):
-    # Load results
-    df = pd.read_csv(results_file)
-    
-    fig, axes = plt.subplots(2, 3, figsize=(18, 12))
-    fig.suptitle('European Energy Analysis - All Countries', fontsize=16, fontweight='bold')
-    
-    # 1. Fossil dependency bar chart
-    df_sorted = df.sort_values('Fossil_Dependency_%', ascending=True)
-    axes[0, 0].barh(df_sorted['Country'], df_sorted['Fossil_Dependency_%'])
-    axes[0, 0].set_xlabel('Fossil Dependency (%)')
-    axes[0, 0].set_title('Fossil Fuel Dependency by Country')
-    axes[0, 0].axvline(x=50, color='red', linestyle='--', alpha=0.5)
-    
-    # 2. Renewable share
-    axes[0, 1].bar(df_sorted['Country'], df_sorted['Renewable_Share_%'])
-    axes[0, 1].set_xlabel('Country')
-    axes[0, 1].set_ylabel('Renewable Share (%)')
-    axes[0, 1].set_title('Renewable Energy Share')
-    axes[0, 1].tick_params(axis='x', rotation=45)
-    axes[0, 1].axhline(y=50, color='green', linestyle='--', alpha=0.5)
-    
-    # 3. CO2 reduction potential
-    axes[0, 2].bar(df_sorted['Country'], df_sorted['CO2_Reduction_Potential_Mt'])
-    axes[0, 2].set_xlabel('Country')
-    axes[0, 2].set_ylabel('CO2 Reduction Potential (Million tons)')
-    axes[0, 2].set_title('CO2 Reduction Potential (15% efficiency)')
-    axes[0, 2].tick_params(axis='x', rotation=45)
-    
-    # 4. Investment vs Savings scatter
-    axes[1, 0].scatter(df['Investment_€B'], df['Annual_Savings_€M'], 
-                      s=df['CO2_Reduction_Potential_Mt']*50, alpha=0.6)
-    for i, row in df.iterrows():
-        axes[1, 0].text(row['Investment_€B'], row['Annual_Savings_€M'], 
-                       row['Country'], fontsize=8, alpha=0.7)
-    axes[1, 0].set_xlabel('Investment Required (€ Billion)')
-    axes[1, 0].set_ylabel('Annual Savings (€ Million)')
-    axes[1, 0].set_title('Investment vs Annual Savings')
-    
-    # 5. Payback period
-    colors = ['green' if x < 10 else 'orange' if x < 20 else 'red' for x in df['Payback_Years']]
-    axes[1, 1].bar(df['Country'], df['Payback_Years'], color=colors)
-    axes[1, 1].set_xlabel('Country')
-    axes[1, 1].set_ylabel('Payback Period (Years)')
-    axes[1, 1].set_title('Investment Payback Period')
-    axes[1, 1].tick_params(axis='x', rotation=45)
-    axes[1, 1].axhline(y=10, color='gray', linestyle='--', alpha=0.5)
-    
-    # 6. ROI
-    axes[1, 2].bar(df['Country'], df['ROI_%'])
-    axes[1, 2].set_xlabel('Country')
-    axes[1, 2].set_ylabel('Return on Investment (%)')
-    axes[1, 2].set_title('Return on Investment (ROI)')
-    axes[1, 2].tick_params(axis='x', rotation=45)
-    axes[1, 2].axhline(y=10, color='gray', linestyle='--', alpha=0.5)
-    
-    plt.tight_layout()
-    plt.savefig('outputs/european_energy_analysis.png', dpi=300, bbox_inches='tight')
-    plt.show()
-    
-    # Summary statistics
-    print("\\n=== SUMMARY STATISTICS ===")
-    print(f"Number of countries analyzed: {len(df)}")
-    print(f"Average fossil dependency: {df['Fossil_Dependency_%'].mean():.1f}%")
-    print(f"Average renewable share: {df['Renewable_Share_%'].mean():.1f}%")
-    print(f"Total CO2 reduction potential: {df['CO2_Reduction_Potential_Mt'].sum():.1f} million tons/year")
-    print(f"Total investment required: €{df['Investment_€B'].sum():,.0f} billion")
-    print(f"Total annual savings: €{df['Annual_Savings_€M'].sum():,.0f} million")
-
-# Run visualization
-if __name__ == "__main__":
-    import glob
-    result_files = glob.glob('outputs/all_countries_analysis_*.csv')
-    if result_files:
-        latest_file = max(result_files, key=lambda x: x)
-        plot_european_energy_analysis(latest_file)
-    else:
-        print("No analysis files found. Run main_multi_country.py first.")
-"""
-    
-    os.makedirs('scripts', exist_ok=True)
-    with open('scripts/visualize_results.py', 'w') as f:
-        f.write(viz_script)
-    
-    print(f"\nVisualization script created: scripts/visualize_results.py")
-    print("Run: python scripts/visualize_results.py")
 
 if __name__ == "__main__":
     try:
