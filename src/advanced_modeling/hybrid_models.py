@@ -19,7 +19,7 @@ import seaborn as sns
 from tqdm import tqdm
 
 class MultiCountryEnergyForecaster_CLEAN:
-    """Forecaster for multiple countries with NO LEAKAGE"""
+    """Forecaster for multiple countries """
     
     def __init__(self, data_path='data/europe_energy_real.csv'):
         self.data_path = data_path
