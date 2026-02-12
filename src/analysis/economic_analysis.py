@@ -645,10 +645,10 @@ class EnergyPredictorWithFullAnalysis:
         
         print(f"\nModel Forecast Improvement: {improvement*100:.2f}%")
         if improvement == 0:
-            print("⚠️  Model shows no improvement - using conservative 1% scenario for analysis")
+            print("  Model shows no improvement - using conservative 1% scenario for analysis")
             improvement = 0.01
         
-        print(f"🔴 Non-linear transformation: improvement^1.5 * 0.3")
+        print(f" Non-linear transformation: improvement^1.5 * 0.3")
         print("-" * 100)
         
         total_co2 = 0
@@ -864,7 +864,7 @@ def main():
     print("=" * 70)
     print("ENERGY FORECASTING WITH COMPREHENSIVE ANALYSIS")
     print("=" * 70)
-    print("\n🔴 CRITICAL FIXES FOR 0% IMPROVEMENT:")
+    print("\n CRITICAL FIXES FOR 0% IMPROVEMENT:")
     print("1. LSTM instead of Transformer")
     print("2. Reduced features: 50 → 30")
     print("3. Increased regularization: weight_decay 1e-4 → 1e-3")
@@ -873,7 +873,7 @@ def main():
     print("6. Improved cyclical encoding (sin/cos)")
     print("7. Validation-based improvement calculation")
     print("8. Conservative 1% fallback for zero improvement")
-    print("9. 🔥 FIXED: 0-d array iteration bug (handles all tensor shapes)")
+    print("9.  FIXED: 0-d array iteration bug (handles all tensor shapes)")
     print("=" * 70)
     
     predictor = EnergyPredictorWithFullAnalysis(sequence_length=168)
@@ -916,16 +916,16 @@ def main():
         predictor.save_model()
         
         print(f"\n{'='*70}")
-        print("✅ PROCESS COMPLETED SUCCESSFULLY!")
+        print(" PROCESS COMPLETED SUCCESSFULLY!")
         print(f"{'='*70}")
-        print(f"\n📊 FINAL SUMMARY:")
+        print(f"\n FINAL SUMMARY:")
         print(f"   Model Improvement: {predictor.model_improvement*100:.2f}%")
         print(f"   (Using 1% conservative scenario for impact analysis)")
         print(f"   Features Used: {predictor.input_dim}")
         print(f"   Files Generated: 7")
         
     except Exception as e:
-        print(f"\n❌ ERROR: {e}")
+        print(f"\n ERROR: {e}")
         import traceback
         traceback.print_exc()
 
