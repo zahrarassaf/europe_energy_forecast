@@ -1,28 +1,3 @@
-"""
-Energy Forecasting System for Q1 Journal Submission
-===================================================
-
-This module implements a comprehensive energy forecasting system with:
-- Complete leakage-free preprocessing pipeline
-- Proper multivariate scaling
-- Full hyperparameter optimization with sufficient training
-- Strong baselines including tree-based models
-- Complete statistical testing with Diebold-Mariano
-- Multi-seed experiments with uncertainty quantification
-- Novel contributions in cross-country transfer learning
-- Windows-optimized to prevent hanging
-- Fixed all critical bugs including probabilistic loss, lag leakage, memory issues, feature-target alignment
-- Fixed multi-head attention with proper tensor operations
-- Fixed prediction intervals with proper quantile regression
-- Fixed bootstrap with adaptive block size
-- Fixed uncertainty visualization
-- Fixed NLL loss with complete term
-
-Author: Research Team
-Date: 2024
-Version: 7.0 (Journal-Ready - All Critical Bugs Fixed)
-"""
-
 import pandas as pd
 import numpy as np
 import random
