@@ -1,15 +1,10 @@
-# ============================================================================
-# FIX FOR JUPYTER - Must be at the very top
-# ============================================================================
+ ============================================================================
 import sys
 import os
 
 # Fix for Jupyter: if sys.argv is empty or has invalid values
 if len(sys.argv) == 0 or not sys.argv[0]:
     sys.argv = ['']  # Add a dummy argument for ArgumentParser
-
-# ============================================================================
-# STANDARD IMPORTS
 # ============================================================================
 import numpy as np
 import pandas as pd
@@ -31,7 +26,7 @@ from pathlib import Path
 from tqdm import tqdm
 
 # ============================================================================
-# SCIENTIFIC COMPUTING IMPORTS
+# 1
 # ============================================================================
 from scipy import stats
 from scipy.stats import wilcoxon, norm
