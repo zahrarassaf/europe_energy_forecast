@@ -8,25 +8,23 @@ from datetime import datetime, timedelta
 from sklearn.preprocessing import StandardScaler
 from torch.utils.data import Dataset, DataLoader
 import warnings
+import re
+import os
 warnings.filterwarnings('ignore')
-
-# ============================================================================
-# ANALYZER CLASSES - FINAL FIX
-# ============================================================================
 
 class CarbonImpactAnalyzer:
     def __init__(self):
         self.co2_intensity_by_country = {
-            'DE': 420, 'FR': 56, 'SE': 40, 'AT': 120, 'ES': 230,
-            'IT': 320, 'GB': 250, 'NL': 390, 'PL': 710, 'BE': 180,
-            'DK': 150, 'FI': 120, 'IE': 350, 'PT': 260, 'GR': 580,
-            'CZ': 530, 'HU': 280, 'RO': 340, 'BG': 490, 'HR': 280,
-            'SI': 280, 'SK': 220, 'EE': 560, 'LV': 160, 'LT': 120,
-            'LU': 200, 'MT': 480, 'CY': 650
+            'AT': 120, 'BE': 180, 'BG': 490, 'CH': 80, 'CY': 650,
+            'CZ': 530, 'DE': 420, 'DK': 150, 'EE': 560, 'ES': 230,
+            'FI': 120, 'FR': 56, 'GB': 250, 'GR': 580, 'HR': 280,
+            'HU': 280, 'IE': 350, 'IT': 320, 'LT': 120, 'LU': 200,
+            'LV': 160, 'ME': 300, 'NL': 390, 'NO': 40, 'PL': 710,
+            'PT': 260, 'RO': 340, 'RS': 400, 'SE': 40, 'SI': 280,
+            'SK': 220, 'UA': 300
         }
     
     def calculate_carbon_reduction(self, df, improvement, country_code='AT', use_default_only=False):
-        # FIX: If improvement is 0 or negative, return ZERO
         if improvement <= 0:
             return {
                 'annual_co2_reduction_tons': 0.0,
@@ -39,42 +37,9 @@ class CarbonImpactAnalyzer:
             }
         
         try:
-            if use_default_only:
-                result = self._get_default_values(country_code)
-                # Scale default values by improvement
-                result['annual_co2_reduction_tons'] *= improvement / 0.05  # Scale from 5% base
-                result['annual_energy_savings_mwh'] *= improvement / 0.05
-                result['equivalent_cars_removed'] = int(result['annual_co2_reduction_tons'] / 4.6)
-                result['equivalent_trees_planted'] = int(result['annual_co2_reduction_tons'] * 20)
-                return result
+            target_col = f"{country_code}_load_actual_entsoe_transparency"
             
-            load_col = f"{country_code.lower()}_load_actual_entsoe_transparency"
-            
-            if load_col not in df.columns:
-                possible_patterns = [
-                    f"{country_code.lower()}_load_actual",
-                    f"load_actual_{country_code.lower()}",
-                    f"{country_code.lower()}_load",
-                ]
-                
-                found_col = None
-                for pattern in possible_patterns:
-                    matching_cols = [col for col in df.columns if pattern in col.lower()]
-                    if matching_cols:
-                        found_col = matching_cols[0]
-                        break
-                
-                if found_col:
-                    load_col = found_col
-                else:
-                    result = self._get_default_values(country_code)
-                    result['annual_co2_reduction_tons'] *= improvement / 0.05
-                    result['annual_energy_savings_mwh'] *= improvement / 0.05
-                    result['equivalent_cars_removed'] = int(result['annual_co2_reduction_tons'] / 4.6)
-                    result['equivalent_trees_planted'] = int(result['annual_co2_reduction_tons'] * 20)
-                    return result
-            
-            if load_col not in df.columns or df[load_col].isna().all():
+            if target_col not in df.columns:
                 result = self._get_default_values(country_code)
                 result['annual_co2_reduction_tons'] *= improvement / 0.05
                 result['annual_energy_savings_mwh'] *= improvement / 0.05
@@ -82,7 +47,15 @@ class CarbonImpactAnalyzer:
                 result['equivalent_trees_planted'] = int(result['annual_co2_reduction_tons'] * 20)
                 return result
             
-            avg_consumption = df[load_col].mean()
+            if df[target_col].isna().all():
+                result = self._get_default_values(country_code)
+                result['annual_co2_reduction_tons'] *= improvement / 0.05
+                result['annual_energy_savings_mwh'] *= improvement / 0.05
+                result['equivalent_cars_removed'] = int(result['annual_co2_reduction_tons'] / 4.6)
+                result['equivalent_trees_planted'] = int(result['annual_co2_reduction_tons'] * 20)
+                return result
+            
+            avg_consumption = df[target_col].mean()
             
             if pd.isna(avg_consumption) or avg_consumption == 0:
                 result = self._get_default_values(country_code)
@@ -97,7 +70,7 @@ class CarbonImpactAnalyzer:
             if isinstance(df.index, pd.DatetimeIndex) and len(df.index) > 1:
                 try:
                     time_diff = df.index[1] - df.index[0]
-                    hours_per_year = 8760 if abs(time_diff.total_seconds() / 3600 - 1) < 0.1 else 365*24
+                    hours_per_year = 8760 if abs(time_diff.total_seconds() / 3600 - 1) < 0.1 else 8760
                 except:
                     hours_per_year = 8760
             else:
@@ -136,7 +109,7 @@ class CarbonImpactAnalyzer:
         }
         
         multiplier = default_multipliers.get(country_code, 1.0)
-        base_co2 = 50000 * multiplier  # Base at 5% improvement
+        base_co2 = 50000 * multiplier
         
         return {
             'annual_co2_reduction_tons': base_co2,
@@ -156,7 +129,6 @@ class EconomicAnalyzer:
     def calculate_economic_savings(self, df, improvement, co2_reduction, 
                                   energy_savings_mwh=None, country_code='AT', 
                                   model_performance=0.0):
-        # FIX: If improvement is 0 or negative, return ZERO economic impact
         if improvement <= 0:
             return {
                 'total_annual_savings_eur': 0.0,
@@ -173,12 +145,10 @@ class EconomicAnalyzer:
             }
         
         try:
-            # Apply model performance adjustment
             if model_performance < 0:
                 adjusted_improvement = improvement * max(0, 1 + model_performance/100)
                 improvement = adjusted_improvement
             
-            # FIX: Double-check after adjustment
             if improvement <= 0:
                 return {
                     'total_annual_savings_eur': 0.0,
@@ -195,9 +165,9 @@ class EconomicAnalyzer:
                 }
             
             if pd.isna(co2_reduction) or co2_reduction <= 0:
-                co2_reduction = 50000 * (improvement / 0.05)  # Scale from 5% base
+                co2_reduction = 50000 * (improvement / 0.05)
             
-            price_cols = [col for col in df.columns if 'price' in col.lower() and country_code.lower() in col.lower()]
+            price_cols = [col for col in df.columns if 'price_day_ahead' in col and country_code in col]
             
             if price_cols:
                 try:
@@ -210,8 +180,7 @@ class EconomicAnalyzer:
                 avg_price = 80
             
             if energy_savings_mwh is None or pd.isna(energy_savings_mwh) or energy_savings_mwh <= 0:
-                # Calculate based on improvement
-                energy_savings_mwh = 1000000 * (improvement / 0.05)  # Scale from 5% base
+                energy_savings_mwh = 1000000 * (improvement / 0.05)
             
             savings_from_efficiency = energy_savings_mwh * avg_price
             savings_from_carbon = co2_reduction * self.carbon_price
@@ -261,13 +230,23 @@ class EconomicAnalyzer:
                 'model_performance_impact': model_performance
             }
 
-# Keep the rest of the code EXACTLY THE SAME as before
-# (Transformer, PositionalEncoding, TimeSeriesDataset, ScientificEnergyPredictor classes)
-# Only replace the CarbonImpactAnalyzer and EconomicAnalyzer classes above
-
-# ============================================================================
-# SCIENTIFIC TRANSFORMER MODEL (EXACTLY SAME)
-# ============================================================================
+class PositionalEncoding(nn.Module):
+    def __init__(self, d_model, dropout=0.1, max_len=5000):
+        super(PositionalEncoding, self).__init__()
+        self.dropout = nn.Dropout(p=dropout)
+        
+        pe = torch.zeros(max_len, d_model)
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-np.log(10000.0) / d_model))
+        
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        pe = pe.unsqueeze(0)
+        self.register_buffer('pe', pe)
+    
+    def forward(self, x):
+        x = x + self.pe[:, :x.size(1), :]
+        return self.dropout(x)
 
 class TimeSeriesTransformer(nn.Module):
     def __init__(self, input_dim, d_model=64, nhead=8, num_layers=3, dropout=0.1):
@@ -308,24 +287,6 @@ class TimeSeriesTransformer(nn.Module):
         x = x[:, -1, :]
         return self.output_layer(x).squeeze()
 
-class PositionalEncoding(nn.Module):
-    def __init__(self, d_model, dropout=0.1, max_len=5000):
-        super(PositionalEncoding, self).__init__()
-        self.dropout = nn.Dropout(p=dropout)
-        
-        pe = torch.zeros(max_len, d_model)
-        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-np.log(10000.0) / d_model))
-        
-        pe[:, 0::2] = torch.sin(position * div_term)
-        pe[:, 1::2] = torch.cos(position * div_term)
-        pe = pe.unsqueeze(0)
-        self.register_buffer('pe', pe)
-    
-    def forward(self, x):
-        x = x + self.pe[:, :x.size(1), :]
-        return self.dropout(x)
-
 class TimeSeriesDataset(Dataset):
     def __init__(self, X, y, sequence_length=168):
         self.X = X
@@ -341,10 +302,6 @@ class TimeSeriesDataset(Dataset):
             self.y[idx+self.sequence_length]
         )
 
-# ============================================================================
-# SCIENTIFIC ENERGY PREDICTOR (EXACTLY SAME)
-# ============================================================================
-
 class ScientificEnergyPredictor:
     def __init__(self, sequence_length=168, country='AT'):
         self.sequence_length = sequence_length
@@ -355,16 +312,31 @@ class ScientificEnergyPredictor:
         self.economic_analyzer = EconomicAnalyzer()
         self.model = None
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    
-    # ALL OTHER METHODS REMAIN EXACTLY THE SAME AS IN PREVIOUS CODE
-    # Only the analyzers are updated
+        self.original_data = None
+        self.training_losses = []
+        self.val_losses = []
+        self.X_train = None
+        self.y_train = None
+        self.X_val = None
+        self.y_val = None
+        self.X_test = None
+        self.y_test = None
+        self.y_train_original = None
+        self.y_val_original = None
+        self.y_test_original = None
+        self.train_loader = None
+        self.val_loader = None
+        self.test_loader = None
+        self.input_dim = None
     
     def prepare_features_scientifically(self, df, target_col):
         features = []
         
-        for lag in [1, 2, 3, 4, 5, 6, 7, 24, 48, 72, 168]:
+        lags = [1, 2, 3, 4, 5, 6, 7, 24, 48, 72, 168]
+        for lag in lags:
             if len(df) > lag:
-                features.append(df[target_col].shift(lag).values.reshape(-1, 1))
+                shifted = df[target_col].shift(lag).values.reshape(-1, 1)
+                features.append(shifted)
         
         if 'utc_timestamp' in df.columns:
             timestamps = pd.to_datetime(df['utc_timestamp'])
@@ -391,12 +363,20 @@ class ScientificEnergyPredictor:
             features.extend([rolling_mean_24h, rolling_std_24h])
         
         features = np.hstack(features)
-        features = pd.DataFrame(features).fillna(method='bfill').fillna(method='ffill').values
+        
+        for i in range(features.shape[1]):
+            col = features[:, i]
+            mask = np.isnan(col)
+            if mask.any():
+                first_valid = np.where(~mask)[0]
+                if len(first_valid) > 0:
+                    col[mask] = col[first_valid[0]]
+                features[:, i] = col
         
         return features
     
     def load_and_prepare_data(self, filepath='data/europe_energy_real.csv'):
-        print(f"Loading data from: {filepath}")
+        print(f"Loading data for {self.country} from: {filepath}")
         df = pd.read_csv(filepath)
         
         if 'utc_timestamp' in df.columns:
@@ -407,19 +387,22 @@ class ScientificEnergyPredictor:
         
         if target_col not in df.columns:
             possible_targets = [
-                f"{self.country.lower()}_load_actual",
-                f"load_actual_{self.country.lower()}",
-                f"{self.country.lower()}_load",
+                f"{self.country}_load_actual_entsoe_transparency",
+                f"{self.country.lower()}_load_actual_entsoe_transparency",
+                f"{self.country}_load_actual",
+                f"{self.country}_load"
             ]
             
             for possible in possible_targets:
-                matching = [col for col in df.columns if possible in col.lower()]
-                if matching:
-                    target_col = matching[0]
+                if possible in df.columns:
+                    target_col = possible
                     break
             
             if target_col == f"{self.country}_load_actual_entsoe_transparency":
-                raise ValueError(f"Target column for {self.country} not found")
+                print(f"Target column for {self.country} not found, skipping...")
+                return None, None, None
+        
+        print(f"Using target column: {target_col}")
         
         X = self.prepare_features_scientifically(df, target_col)
         y = df[target_col].values
@@ -427,6 +410,10 @@ class ScientificEnergyPredictor:
         valid_idx = ~np.isnan(y)
         X = X[valid_idx]
         y = y[valid_idx]
+        
+        if len(X) < 1000:
+            print(f"Insufficient data for {self.country}: {len(X)} samples, skipping...")
+            return None, None, None
         
         print(f"Clean data shape: X={X.shape}, y={y.shape}")
         
@@ -585,25 +572,22 @@ class ScientificEnergyPredictor:
         else:
             raise ValueError("Unknown loader")
         
-        mse = np.mean((predictions - actuals) ** 2)
-        rmse = np.sqrt(mse)
+        rmse = np.sqrt(np.mean((predictions - actuals) ** 2))
         mae = np.mean(np.abs(predictions - actuals))
         
         persistence_forecast = np.roll(actuals, 24)
         valid_idx = ~np.isnan(persistence_forecast)
         persistence_mae = np.mean(np.abs(actuals[valid_idx] - persistence_forecast[valid_idx]))
         
-        error_reduction = (persistence_mae - mae) / persistence_mae * 100
+        error_reduction = (persistence_mae - mae) / persistence_mae * 100 if persistence_mae > 0 else 0
         
         print(f"\n{'='*60}")
-        print(f"EVALUATION ON {set_name.upper()} SET")
+        print(f"EVALUATION ON {set_name.upper()} SET FOR {self.country}")
         print(f"{'='*60}")
         print(f"RMSE: {rmse:.2f} MW")
         print(f"MAE: {mae:.2f} MW")
         print(f"24h Persistence MAE: {persistence_mae:.2f} MW")
         print(f"Improvement over persistence: {error_reduction:.1f}%")
-        print(f"Predictions range: [{predictions.min():.1f}, {predictions.max():.1f}] MW")
-        print(f"Actuals range: [{actuals.min():.1f}, {actuals.max():.1f}] MW")
         
         return predictions, actuals, error_reduction
     
@@ -614,8 +598,7 @@ class ScientificEnergyPredictor:
         
         self.model.eval()
         
-        print(f"\nGenerating {n_days}-day forecast...")
-        print(f"Mode: {'Teacher-forcing' if use_teacher_forcing else 'Free-running'}")
+        print(f"\nGenerating {n_days}-day forecast for {self.country}...")
         
         total_test_samples = len(self.X_test)
         start_idx = total_test_samples - self.sequence_length
@@ -666,65 +649,47 @@ class ScientificEnergyPredictor:
             'predicted_load': forecasts
         })
         
-        forecast_csv_path = f'scientific_forecast_{n_days}days.csv'
+        forecast_csv_path = f'scientific_forecast_{self.country}_{n_days}days.csv'
         forecast_df.to_csv(forecast_csv_path, index=False)
         
         print(f"\nForecast saved to: {forecast_csv_path}")
-        print(f"Forecast range: [{np.min(forecasts):.1f}, {np.max(forecasts):.1f}] MW")
-        print(f"Average: {np.mean(forecasts):.1f} MW")
         
         return forecast_df
     
     def _check_country_data_availability(self, country_code):
-        patterns = [
-            f"{country_code.lower()}_load_actual",
-            f"load_actual_{country_code.lower()}",
-            f"{country_code.lower()}_load",
-        ]
+        target_col = f"{country_code}_load_actual_entsoe_transparency"
         
-        for pattern in patterns:
-            matching = [col for col in self.original_data.columns if pattern in col.lower()]
-            if matching:
-                col = matching[0]
-                if col in self.original_data.columns:
-                    data = self.original_data[col]
-                    if not data.isna().all() and data.mean() > 0:
-                        return True
+        if self.original_data is not None and target_col in self.original_data.columns:
+            data = self.original_data[target_col]
+            if not data.isna().all() and data.mean() > 0:
+                return True
         return False
     
     def analyze_carbon_impact_with_uncertainty(self, error_reduction_percent, 
                                               improvement_scenarios=[0.01, 0.05, 0.10]):
         print(f"\n{'='*60}")
-        print("CARBON IMPACT ANALYSIS WITH UNCERTAINTY")
+        print(f"CARBON IMPACT ANALYSIS FOR {self.country}")
         print(f"{'='*60}")
         
         if self.original_data is None:
             print("No data available")
             return {}
         
-        print(f"\nModel Performance: {error_reduction_percent:.1f}% vs persistence")
+        print(f"Model Performance: {error_reduction_percent:.1f}% vs persistence")
         
-        # ULTRA-CONSERVATIVE ADJUSTMENT
         if error_reduction_percent < 0:
-            print(f"\nWARNING: Model performs WORSE than baseline")
-            print(f"Applying ultra-conservative adjustment...")
-            
+            print(f"WARNING: Model performs worse than baseline")
             adjusted_scenarios = []
             for scenario in improvement_scenarios:
-                # If model worse than -10%, NO improvement
                 if error_reduction_percent < -10:
                     adjusted = 0
                 else:
-                    # Linear reduction based on performance
                     adjusted = scenario * max(0, 1 + error_reduction_percent/100)
                 adjusted_scenarios.append(adjusted)
-            
-            print(f"Original scenarios: {[f'{s*100:.1f}%' for s in improvement_scenarios]}")
-            print(f"Adjusted scenarios: {[f'{s*100:.1f}%' for s in adjusted_scenarios]}")
             improvement_scenarios = adjusted_scenarios
         
         scenario_results = {}
-        country_codes = ['AT', 'DE', 'FR', 'IT', 'ES', 'GB', 'NL', 'PL', 'BE']
+        country_codes = list(self.carbon_analyzer.co2_intensity_by_country.keys())
         
         for scenario_idx, improvement in enumerate(improvement_scenarios):
             print(f"\nScenario {scenario_idx+1}: {improvement*100:.1f}% improvement")
@@ -747,7 +712,7 @@ class ScientificEnergyPredictor:
                 scenario_co2 += carbon_result['annual_co2_reduction_tons']
                 scenario_energy += carbon_result['annual_energy_savings_mwh']
             
-            scenario_results[f'scenario_{improvement}'] = {
+            scenario_results[f'{improvement*100:.0f}pct'] = {
                 'improvement_percent': improvement * 100,
                 'total_co2_reduction_tons': scenario_co2,
                 'total_energy_savings_mwh': scenario_energy,
@@ -757,36 +722,15 @@ class ScientificEnergyPredictor:
             print(f"Total CO2 Reduction: {scenario_co2:,.0f} tons")
             print(f"Total Energy Savings: {scenario_energy:,.0f} MWh")
         
-        min_co2 = scenario_results[f'scenario_{improvement_scenarios[0]}']['total_co2_reduction_tons']
-        max_co2 = scenario_results[f'scenario_{improvement_scenarios[-1]}']['total_co2_reduction_tons']
-        
-        print(f"\n{'='*60}")
-        print("SCENARIO SUMMARY")
-        print(f"{'='*60}")
-        
-        if error_reduction_percent < -10:
-            print("ULTRA-CONSERVATIVE: Model performs significantly worse")
-            print("Results represent UPPER BOUND estimates")
-        elif error_reduction_percent < 0:
-            print("CONSERVATIVE: Model performs worse than baseline")
-            print("Results adjusted downward")
-        
-        for i, scenario in enumerate(improvement_scenarios):
-            result = scenario_results[f'scenario_{scenario}']
-            print(f"{scenario*100:.1f}% improvement: {result['total_co2_reduction_tons']:,.0f} tons CO2/year")
-        
-        print(f"Range: {min_co2:,.0f} - {max_co2:,.0f} tons CO2/year")
-        
         scenario_df = pd.DataFrame(scenario_results).T
-        scenario_df.to_csv('carbon_impact_scenarios.csv')
-        
-        print(f"\nResults saved to: carbon_impact_scenarios.csv")
+        scenario_df.to_csv(f'carbon_impact_scenarios_{self.country}.csv')
+        print(f"\nResults saved to: carbon_impact_scenarios_{self.country}.csv")
         
         return scenario_results
     
     def analyze_economic_impact(self, improvement=0.05, model_performance=0.0):
         print(f"\n{'='*60}")
-        print("ECONOMIC IMPACT ANALYSIS")
+        print(f"ECONOMIC IMPACT ANALYSIS FOR {self.country}")
         print(f"{'='*60}")
         
         if self.original_data is None:
@@ -795,19 +739,12 @@ class ScientificEnergyPredictor:
         
         print(f"\nAssumptions:")
         print(f"  Base Efficiency Improvement: {improvement*100:.1f}%")
-        print(f"  Model Performance vs Persistence: {model_performance:.1f}%")
-        print(f"  Carbon Price: €{self.economic_analyzer.carbon_price}/ton")
+        print(f"  Model Performance: {model_performance:.1f}%")
+        print(f"  Carbon Price: EUR{self.economic_analyzer.carbon_price}/ton")
         print(f"  Discount Rate: {self.economic_analyzer.discount_rate*100:.1f}%")
-        print(f"  Investment Cost: €500/MWh of savings")
-        print(f"  Analysis Period: 20 years")
-        
-        if model_performance < 0:
-            print(f"\nMODEL PERFORMANCE WARNING:")
-            print(f"  Model performs {model_performance:.1f}% worse than baseline")
-            print(f"  Efficiency gains will be reduced accordingly")
         
         results_by_country = {}
-        country_codes = ['AT', 'DE', 'FR', 'IT', 'ES', 'GB', 'NL', 'PL', 'BE']
+        country_codes = list(self.carbon_analyzer.co2_intensity_by_country.keys())
         
         total_annual_savings = 0
         total_investment = 0
@@ -840,11 +777,10 @@ class ScientificEnergyPredictor:
             }
             
             print(f"\n{country_code}:")
-            print(f"  Annual Savings: €{economic_result['total_annual_savings_eur']:,}")
-            print(f"  Investment: €{economic_result['initial_investment_eur']:,}")
+            print(f"  Annual Savings: EUR{economic_result['total_annual_savings_eur']:,}")
+            print(f"  Investment: EUR{economic_result['initial_investment_eur']:,}")
             print(f"  Payback: {economic_result['payback_period_years']} years")
             print(f"  ROI: {economic_result['roi_percentage']:.1f}%")
-            print(f"  NPV: €{economic_result['npv_eur']:,}")
             
             total_annual_savings += economic_result['total_annual_savings_eur']
             total_investment += economic_result['initial_investment_eur']
@@ -861,53 +797,39 @@ class ScientificEnergyPredictor:
             avg_payback = 999
             avg_roi = 0
         
-        print(f"Total Annual Savings: €{total_annual_savings:,}")
-        print(f"Total Investment: €{total_investment:,}")
+        print(f"Total Annual Savings: EUR{total_annual_savings:,}")
+        print(f"Total Investment: EUR{total_investment:,}")
         print(f"Average Payback: {avg_payback:.1f} years")
         print(f"Average ROI: {avg_roi:.1f}%")
-        print(f"Total NPV (20 years): €{total_npv:,}")
-        
-        if model_performance < -10:
-            print(f"\nRISK WARNING:")
-            print(f"  Model performance is significantly worse than baseline")
-            print(f"  These results are UPPER BOUND estimates")
+        print(f"Total NPV (20 years): EUR{total_npv:,}")
         
         economic_df = pd.DataFrame({
             country_code: {
                 **results_by_country[country_code]['economic'],
                 'has_real_data': results_by_country[country_code]['has_real_data'],
-                'co2_reduction_tons': results_by_country[country_code]['carbon']['annual_co2_reduction_tons'],
-                'energy_savings_mwh': results_by_country[country_code]['carbon']['annual_energy_savings_mwh']
+                'co2_reduction_tons': results_by_country[country_code]['carbon']['annual_co2_reduction_tons']
             } 
             for country_code in results_by_country
         }).T
         
-        economic_df.to_csv('economic_impact_analysis.csv')
-        
-        print(f"\nResults saved to: economic_impact_analysis.csv")
+        economic_df.to_csv(f'economic_impact_analysis_{self.country}.csv')
+        print(f"\nResults saved to: economic_impact_analysis_{self.country}.csv")
         
         return results_by_country
     
-    def generate_comprehensive_report(self, error_reduction_percent, 
-                                     base_improvement=0.05):
+    def generate_comprehensive_report(self, error_reduction_percent, base_improvement=0.05):
         print(f"\n{'='*70}")
-        print("COMPREHENSIVE SCIENTIFIC & BUSINESS REPORT")
+        print(f"COMPREHENSIVE REPORT FOR {self.country}")
         print(f"{'='*70}")
         
         print(f"\nSCIENTIFIC FINDINGS:")
         print(f"  Forecast Error Reduction: {error_reduction_percent:.1f}% vs persistence")
         
         if error_reduction_percent < 0:
-            print(f"  WARNING: Model performs WORSE than baseline")
-            print(f"  Efficiency gains reduced accordingly")
+            print(f"  WARNING: Model performs worse than baseline")
         
-        carbon_scenarios = self.analyze_carbon_impact_with_uncertainty(
-            error_reduction_percent
-        )
-        
-        economic_results = self.analyze_economic_impact(
-            base_improvement, error_reduction_percent
-        )
+        carbon_scenarios = self.analyze_carbon_impact_with_uncertainty(error_reduction_percent)
+        economic_results = self.analyze_economic_impact(base_improvement, error_reduction_percent)
         
         print(f"\n{'='*70}")
         print("STRATEGIC RECOMMENDATIONS")
@@ -925,44 +847,16 @@ class ScientificEnergyPredictor:
                 'country': country_code,
                 'roi': roi,
                 'payback': payback,
-                'npv': results['economic']['npv_eur'],
                 'has_real_data': results['has_real_data']
             })
         
         roi_df = pd.DataFrame(roi_data)
         roi_df = roi_df.sort_values('roi', ascending=False)
         
-        print(f"\n1. Priority Countries:")
-        for i, row in roi_df.head(3).iterrows():
+        print(f"\nPriority Countries:")
+        for i, row in roi_df.head(5).iterrows():
             data_indicator = "REAL" if row['has_real_data'] else "EST"
-            print(f"   {row['country']}: ROI = {row['roi']:.1f}%, "
-                  f"Payback = {row['payback']:.1f} years ({data_indicator})")
-        
-        total_investment = sum(r['economic']['initial_investment_eur'] 
-                              for r in economic_results.values())
-        total_savings = sum(r['economic']['total_annual_savings_eur'] 
-                           for r in economic_results.values())
-        
-        if error_reduction_percent < -10:
-            investment_multiplier = 0.5
-            print(f"\n2. Investment Strategy (HIGH RISK):")
-            print(f"   Model performs significantly worse than baseline")
-            print(f"   Recommended: Pilot projects only")
-        elif error_reduction_percent < 0:
-            investment_multiplier = 0.7
-            print(f"\n2. Investment Strategy (MEDIUM RISK):")
-            print(f"   Model performs worse than baseline")
-            print(f"   Recommended: Conservative phased investment")
-        else:
-            investment_multiplier = 1.0
-            print(f"\n2. Investment Strategy (LOW RISK):")
-            print(f"   Model performs better than baseline")
-            print(f"   Recommended: Full implementation")
-        
-        phase1_investment = total_investment * investment_multiplier * 0.5
-        print(f"   Phase 1: €{phase1_investment:,.0f}")
-        print(f"   Full Implementation: €{total_investment:,.0f}")
-        print(f"   Annual Savings: €{total_savings:,.0f}")
+            print(f"  {row['country']}: ROI = {row['roi']:.1f}%, Payback = {row['payback']:.1f} years ({data_indicator})")
         
         report_data = []
         for country_code in economic_results.keys():
@@ -970,38 +864,26 @@ class ScientificEnergyPredictor:
             report_data.append({
                 'Country': country_code,
                 'Model_Performance_%': error_reduction_percent,
-                'Base_Improvement_%': base_improvement * 100,
-                'Adjusted_Improvement_%': results['economic']['adjusted_improvement_percent'],
-                'Annual_Savings_EUR': results['economic']['total_annual_savings_eur'],
-                'Investment_EUR': results['economic']['initial_investment_eur'],
                 'ROI_%': results['economic']['roi_percentage'],
                 'Payback_Years': results['economic']['payback_period_years'],
-                'NPV_EUR': results['economic']['npv_eur'],
+                'Annual_Savings_EUR': results['economic']['total_annual_savings_eur'],
                 'CO2_Reduction_Tons': results['carbon']['annual_co2_reduction_tons'],
-                'Energy_Savings_MWh': results['carbon']['annual_energy_savings_mwh'],
-                'Has_Real_Data': results['has_real_data'],
-                'Risk_Assessment': 'HIGH' if error_reduction_percent < -10 else 'MEDIUM' if error_reduction_percent < 0 else 'LOW'
+                'Has_Real_Data': results['has_real_data']
             })
         
         report_df = pd.DataFrame(report_data)
-        report_df.to_csv('comprehensive_scientific_report.csv', index=False)
+        report_df.to_csv(f'comprehensive_report_{self.country}.csv', index=False)
         
-        print(f"\nReport saved to: comprehensive_scientific_report.csv")
-        
-        if error_reduction_percent < 0:
-            print(f"\nFINAL RECOMMENDATION:")
-            print(f"  Focus on model improvement before large investments")
-        else:
-            print(f"\nFINAL RECOMMENDATION:")
-            print(f"  Proceed with investment strategy")
+        print(f"\nReport saved to: comprehensive_report_{self.country}.csv")
         
         return report_df
     
     def plot_comprehensive_results(self):
         try:
             fig, axes = plt.subplots(3, 2, figsize=(16, 12))
+            fig.suptitle(f'Energy Forecasting Results - {self.country}', fontsize=14)
             
-            if hasattr(self, 'training_losses') and hasattr(self, 'val_losses'):
+            if len(self.training_losses) > 0 and len(self.val_losses) > 0:
                 axes[0, 0].plot(self.training_losses, 'b-', label='Training', linewidth=2)
                 axes[0, 0].plot(self.val_losses, 'r-', label='Validation', linewidth=2)
                 axes[0, 0].set_xlabel('Epoch')
@@ -1017,7 +899,7 @@ class ScientificEnergyPredictor:
                 axes[0, 1].plot(test_predictions[:plot_len], 'r-', alpha=0.7, label='Predicted', linewidth=1.5)
                 axes[0, 1].set_xlabel('Time (hours)')
                 axes[0, 1].set_ylabel('Load (MW)')
-                axes[0, 1].set_title('Test Set: One Week Prediction')
+                axes[0, 1].set_title('Test Set Prediction (1 week)')
                 axes[0, 1].legend()
                 axes[0, 1].grid(True, alpha=0.3)
             
@@ -1040,7 +922,7 @@ class ScientificEnergyPredictor:
             axes[1, 1].set_yticks([])
             axes[1, 1].legend()
             
-            if hasattr(self, 'y_train_original'):
+            if hasattr(self, 'y_train_original') and self.y_train_original is not None:
                 train_len = min(200, len(self.y_train_original))
                 val_len = min(200, len(self.y_val_original))
                 test_len = min(200, len(self.y_test_original))
@@ -1056,39 +938,21 @@ class ScientificEnergyPredictor:
                 axes[2, 0].legend()
                 axes[2, 0].grid(True, alpha=0.3)
             
-            if test_predictions is not None and test_actuals is not None:
-                baseline_labels = ['Our Model', '24h Persistence']
-                mae_values = []
-                
-                min_len = min(len(test_predictions), len(test_actuals))
-                if min_len > 0:
-                    mae_our = np.mean(np.abs(test_predictions[:min_len] - test_actuals[:min_len]))
-                    mae_values.append(mae_our)
-                    
-                    if min_len > 24:
-                        persistence_actuals = test_actuals[:min_len-24]
-                        persistence_forecast = test_actuals[24:min_len]
-                        mae_persistence = np.mean(np.abs(persistence_actuals - persistence_forecast))
-                        mae_values.append(mae_persistence)
-                
-                if mae_values:
-                    axes[2, 1].bar(baseline_labels[:len(mae_values)], mae_values, alpha=0.7)
-                    axes[2, 1].set_ylabel('MAE (MW)')
-                    axes[2, 1].set_title('Comparison with Baseline')
-                    axes[2, 1].grid(True, alpha=0.3)
-            
             plt.tight_layout()
-            plt.savefig('comprehensive_analysis_results.png', dpi=150, bbox_inches='tight')
+            plt.savefig(f'comprehensive_analysis_results_{self.country}.png', dpi=150, bbox_inches='tight')
             plt.close()
-            print("Comprehensive plot saved to: comprehensive_analysis_results.png")
+            print(f"Plot saved to: comprehensive_analysis_results_{self.country}.png")
             
         except Exception as e:
-            print(f"Error creating plot: {e}")
+            print(f"Error creating plot for {self.country}: {e}")
     
-    def save_model(self, path='scientific_business_transformer.pth'):
+    def save_model(self, path=None):
         if self.model is None:
             print("No model to save")
             return
+        
+        if path is None:
+            path = f'scientific_transformer_{self.country}.pth'
         
         torch.save({
             'model_state_dict': self.model.state_dict(),
@@ -1102,89 +966,89 @@ class ScientificEnergyPredictor:
         }, path)
         print(f"Model saved to: {path}")
 
-# ============================================================================
-# MAIN EXECUTION
-# ============================================================================
+def get_all_countries(filepath, n_samples=10000):
+    df = pd.read_csv(filepath, nrows=n_samples)
+    df.columns = [col.strip().replace(' ', '_') for col in df.columns]
+    
+    pattern = r'([A-Z]{2})_load_actual_entsoe_transparency'
+    countries = []
+    for col in df.columns:
+        match = re.match(pattern, col)
+        if match:
+            country_code = match.group(1)
+            if country_code not in countries:
+                countries.append(country_code)
+    
+    return sorted(countries)
 
 def main():
     print("=" * 70)
-    print("SCIENTIFIC ENERGY FORECASTING WITH BUSINESS ANALYSIS")
+    print("COMPLETE CARBON IMPACT ANALYSIS FOR ALL 31 EUROPEAN COUNTRIES")
     print("=" * 70)
     
-    predictor = ScientificEnergyPredictor(sequence_length=168, country='AT')
+    data_path = 'C:/Users/Zahara/Documents/Zoom/europe_energy_forecast/data/europe_energy_real.csv'
     
-    try:
+    all_countries = get_all_countries(data_path)
+    print(f"Found {len(all_countries)} countries: {all_countries}")
+    
+    all_results = {}
+    
+    for i, country in enumerate(all_countries):
         print(f"\n{'='*70}")
-        print("PHASE 1: DATA PREPARATION")
-        print(f"{'='*70}")
-        train_loader, val_loader, test_loader = predictor.load_and_prepare_data()
-        
-        print(f"\n{'='*70}")
-        print("PHASE 2: MODEL TRAINING")
-        print(f"{'='*70}")
-        train_losses, val_losses = predictor.train(epochs=10, lr=0.0005, patience=5)
-        
-        print(f"\n{'='*70}")
-        print("PHASE 3: SCIENTIFIC EVALUATION")
+        print(f"[{i+1}/{len(all_countries)}] Processing: {country}")
         print(f"{'='*70}")
         
-        print("\nVALIDATION SET EVALUATION:")
-        val_predictions, val_actuals, val_error_reduction = predictor.evaluate(
-            predictor.val_loader, "Validation"
-        )
-        
-        print("\n\nTEST SET EVALUATION (FINAL):")
-        test_predictions, test_actuals, test_error_reduction = predictor.evaluate(
-            predictor.test_loader, "Test"
-        )
-        
-        print(f"\n{'='*70}")
-        print("PHASE 4: BUSINESS IMPACT ANALYSIS")
-        print(f"{'='*70}")
-        base_improvement = 0.05
-        comprehensive_report = predictor.generate_comprehensive_report(
-            test_error_reduction, base_improvement
-        )
-        
-        print(f"\n{'='*70}")
-        print("PHASE 5: FORECAST GENERATION")
-        print(f"{'='*70}")
+        predictor = ScientificEnergyPredictor(sequence_length=168, country=country)
         
         try:
-            forecast = predictor.forecast_future_scientifically(n_days=3, use_teacher_forcing=False)
+            train_loader, val_loader, test_loader = predictor.load_and_prepare_data(data_path)
+            
+            if train_loader is None:
+                print(f"Skipping {country}: No valid data")
+                continue
+            
+            predictor.build_model()
+            predictor.train(epochs=10, lr=0.0005, patience=5)
+            
+            val_predictions, val_actuals, val_error_reduction = predictor.evaluate(predictor.val_loader, "Validation")
+            test_predictions, test_actuals, test_error_reduction = predictor.evaluate(predictor.test_loader, "Test")
+            
+            base_improvement = 0.05
+            comprehensive_report = predictor.generate_comprehensive_report(test_error_reduction, base_improvement)
+            
+            predictor.plot_comprehensive_results()
+            predictor.save_model()
+            
+            all_results[country] = {
+                'val_error_reduction': val_error_reduction,
+                'test_error_reduction': test_error_reduction,
+                'mae': np.mean(np.abs(test_predictions - test_actuals)) if test_predictions is not None else None
+            }
+            
+            print(f"\n{country} completed successfully")
+            
         except Exception as e:
-            print(f"Forecasting failed: {e}")
-            forecast = None
-        
-        print(f"\n{'='*70}")
-        print("PHASE 6: VISUALIZATION & SAVING")
-        print(f"{'='*70}")
-        predictor.plot_comprehensive_results()
-        predictor.save_model()
-        
-        print(f"\n{'='*70}")
-        print("PROCESS COMPLETED SUCCESSFULLY")
-        print(f"{'='*70}")
-        
-        print(f"\nGENERATED FILES:")
-        print(f"   1. comprehensive_analysis_results.png")
-        print(f"   2. carbon_impact_scenarios.csv")
-        print(f"   3. economic_impact_analysis.csv")
-        print(f"   4. comprehensive_scientific_report.csv")
-        print(f"   5. scientific_business_transformer.pth")
-        
-        if forecast is not None:
-            print(f"   6. scientific_forecast_3days.csv")
-        
-        print(f"\nPERFORMANCE SUMMARY:")
-        print(f"   Validation MAE: {np.mean(np.abs(val_predictions - val_actuals)):.2f} MW")
-        print(f"   Test MAE: {np.mean(np.abs(test_predictions - test_actuals)):.2f} MW")
-        print(f"   Improvement vs Persistence: {test_error_reduction:.1f}%")
-        
-    except Exception as e:
-        print(f"\nERROR: {e}")
-        import traceback
-        traceback.print_exc()
+            print(f"Error for {country}: {e}")
+            continue
+    
+    print(f"\n{'='*70}")
+    print("ALL COUNTRIES PROCESSED")
+    print(f"{'='*70}")
+    
+    results_df = pd.DataFrame(all_results).T
+    results_df = results_df.sort_values('test_error_reduction', ascending=False)
+    results_df.to_csv('all_31_countries_transformer_results.csv')
+    
+    print("\nCountry Performance Ranking (by Improvement %):")
+    print(results_df[['test_error_reduction', 'mae']].to_string())
+    
+    print(f"\nGenerated Files:")
+    print(f"   - carbon_impact_scenarios_[COUNTRY].csv (for each country)")
+    print(f"   - economic_impact_analysis_[COUNTRY].csv (for each country)")
+    print(f"   - comprehensive_report_[COUNTRY].csv (for each country)")
+    print(f"   - scientific_transformer_[COUNTRY].pth (for each country)")
+    print(f"   - comprehensive_analysis_results_[COUNTRY].png (for each country)")
+    print(f"   - all_31_countries_transformer_results.csv")
 
 if __name__ == "__main__":
     main()
