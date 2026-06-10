@@ -1,5 +1,17 @@
 import pandas as pd
 import numpy as np
+from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
+from sklearn.linear_model import Ridge
+from sklearn.preprocessing import StandardScaler
+import xgboost as xgb
+import lightgbm as lgb
+from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+import warnings
+warnings.filterwarnings('ignore')
+
+# ============================================================================
+# CARBON IMPACT ANALYZER
+# ============================================================================
 
 class CarbonImpactAnalyzer:
     def __init__(self):
@@ -35,6 +47,11 @@ class CarbonImpactAnalyzer:
             'annual_energy_savings_mwh': float(annual_energy_savings)
         }
 
+
+# ============================================================================
+# ECONOMIC ANALYZER
+# ============================================================================
+
 class EconomicAnalyzer:
     def __init__(self):
         self.carbon_price = 80
@@ -68,147 +85,321 @@ class EconomicAnalyzer:
             'npv_eur': round(float(npv), 0)
         }
 
+
+# ============================================================================
+# HYBRID ENSEMBLE FORECASTER
+# ============================================================================
+
+class HybridEnsembleForecaster:
+    def __init__(self, data_path):
+        self.data_path = data_path
+        self.results = {}
+        self.data = None
+        self.feature_scaler = StandardScaler()
+        self.target_scaler = StandardScaler()
+    
+    def load_data(self, n_samples=30000):
+        print(f"Loading data from: {self.data_path}")
+        self.data = pd.read_csv(self.data_path, nrows=n_samples)
+        self.data.columns = [col.strip().replace(' ', '_') for col in self.data.columns]
+        
+        if 'utc_timestamp' in self.data.columns:
+            self.data['utc_timestamp'] = pd.to_datetime(self.data['utc_timestamp'])
+            self.data.set_index('utc_timestamp', inplace=True)
+        
+        print(f"Data shape: {self.data.shape}")
+        return self.data
+    
+    def get_all_countries(self):
+        pattern = r'([A-Z]{2})_load_actual_entsoe_transparency'
+        countries = []
+        for col in self.data.columns:
+            import re
+            match = re.match(pattern, col)
+            if match:
+                country_code = match.group(1)
+                if country_code not in countries:
+                    countries.append(country_code)
+        return sorted(countries)
+    
+    def extract_features(self, df, target_col):
+        df = df.copy()
+        df['target'] = df[target_col]
+        
+        features = {}
+        
+        lags = [1, 2, 3, 24, 48, 168]
+        for lag in lags:
+            if len(df) > lag:
+                col_name = f'lag_{lag}'
+                df[col_name] = df['target'].shift(lag).ffill()
+                features[col_name] = df[col_name].values
+        
+        if hasattr(df.index, 'hour'):
+            df['hour_sin'] = np.sin(2 * np.pi * df.index.hour / 24)
+            df['hour_cos'] = np.cos(2 * np.pi * df.index.hour / 24)
+            df['day_sin'] = np.sin(2 * np.pi * df.index.dayofweek / 7)
+            df['day_cos'] = np.cos(2 * np.pi * df.index.dayofweek / 7)
+            
+            features['hour_sin'] = df['hour_sin'].values
+            features['hour_cos'] = df['hour_cos'].values
+            features['day_sin'] = df['day_sin'].values
+            features['day_cos'] = df['day_cos'].values
+        
+        X = np.column_stack([features[name] for name in features.keys()])
+        y = df['target'].values
+        self.feature_names = list(features.keys())
+        
+        valid_mask = ~np.isnan(X).any(axis=1) & ~np.isnan(y)
+        return X[valid_mask], y[valid_mask]
+    
+    def train_country(self, country_code):
+        print(f"\n{'='*50}")
+        print(f"Training: {country_code}")
+        print(f"{'='*50}")
+        
+        target_col = f"{country_code}_load_actual_entsoe_transparency"
+        if target_col not in self.data.columns:
+            print(f"  Target column not found")
+            return None
+        
+        X, y = self.extract_features(self.data, target_col)
+        
+        if len(X) < 1000:
+            print(f"  Insufficient data: {len(X)} samples")
+            return None
+        
+        split_idx = int(len(X) * 0.8)
+        X_train_raw = X[:split_idx]
+        X_test_raw = X[split_idx:]
+        y_train_raw = y[:split_idx]
+        y_test_raw = y[split_idx:]
+        
+        X_train = self.feature_scaler.fit_transform(X_train_raw)
+        X_test = self.feature_scaler.transform(X_test_raw)
+        
+        y_train = self.target_scaler.fit_transform(y_train_raw.reshape(-1, 1)).flatten()
+        y_test = self.target_scaler.transform(y_test_raw.reshape(-1, 1)).flatten()
+        
+        models = {
+            'XGBoost': xgb.XGBRegressor(n_estimators=100, max_depth=6, learning_rate=0.1, random_state=42, verbosity=0, n_jobs=1),
+            'RandomForest': RandomForestRegressor(n_estimators=100, max_depth=10, random_state=42, n_jobs=1),
+            'GradientBoosting': GradientBoostingRegressor(n_estimators=100, max_depth=6, learning_rate=0.1, random_state=42),
+            'Ridge': Ridge(random_state=42)
+        }
+        
+        predictions_test = {}
+        
+        for name, model in models.items():
+            try:
+                model.fit(X_train, y_train)
+                pred = model.predict(X_test)
+                predictions_test[name] = pred
+            except Exception as e:
+                print(f"  {name} failed: {e}")
+                continue
+        
+        if not predictions_test:
+            return None
+        
+        ensemble_pred = np.mean(list(predictions_test.values()), axis=0)
+        
+        y_test_orig = self.target_scaler.inverse_transform(y_test.reshape(-1, 1)).flatten()
+        ensemble_orig = self.target_scaler.inverse_transform(ensemble_pred.reshape(-1, 1)).flatten()
+        
+        persistence_pred = X_test_raw[:, 0]
+        persistence_orig = self.target_scaler.inverse_transform(persistence_pred.reshape(-1, 1)).flatten()
+        min_len = min(len(y_test_orig), len(persistence_orig))
+        
+        rmse_model = np.sqrt(mean_squared_error(y_test_orig[:min_len], ensemble_orig[:min_len]))
+        rmse_persistence = np.sqrt(mean_squared_error(y_test_orig[:min_len], persistence_orig[:min_len]))
+        r2 = r2_score(y_test_orig[:min_len], ensemble_orig[:min_len])
+        improvement = ((rmse_persistence - rmse_model) / rmse_persistence) * 100
+        
+        result = {
+            'country': country_code,
+            'rmse': rmse_model,
+            'r2': r2,
+            'improvement_pct': improvement,
+            'load_mean_mw': np.mean(y_test_orig),
+            'samples': len(y)
+        }
+        
+        print(f"  RMSE: {rmse_model:.1f} MW")
+        print(f"  R²: {r2:.4f}")
+        print(f"  Improvement: {improvement:.1f}%")
+        print(f"  Mean Load: {result['load_mean_mw']:.0f} MW")
+        
+        return result
+    
+    def run_all_countries(self):
+        countries = self.get_all_countries()
+        print(f"\nFound {len(countries)} countries")
+        
+        for country in countries:
+            result = self.train_country(country)
+            if result:
+                self.results[country] = result
+        
+        return self.results
+
+
+# ============================================================================
+# COMPLETE ANALYSIS WITH FORECASTING
+# ============================================================================
+
+class CompleteEnergyAnalysis:
+    def __init__(self, data_path):
+        self.data_path = data_path
+        self.forecaster = HybridEnsembleForecaster(data_path)
+        self.carbon_analyzer = CarbonImpactAnalyzer()
+        self.economic_analyzer = EconomicAnalyzer()
+        self.forecast_results = {}
+        self.impact_results = {}
+    
+    def run_full_analysis(self):
+        print("=" * 70)
+        print("COMPLETE ENERGY ANALYSIS: FORECASTING + CARBON + ECONOMIC")
+        print("=" * 70)
+        
+        print("\n" + "=" * 70)
+        print("STEP 1: LOAD DATA")
+        print("=" * 70)
+        self.forecaster.load_data(n_samples=30000)
+        
+        print("\n" + "=" * 70)
+        print("STEP 2: TRAIN HYBRID ENSEMBLE FOR ALL COUNTRIES")
+        print("=" * 70)
+        forecast_results = self.forecaster.run_all_countries()
+        
+        print("\n" + "=" * 70)
+        print("STEP 3: CARBON AND ECONOMIC IMPACT ANALYSIS")
+        print("=" * 70)
+        
+        all_impacts = []
+        total_co2 = 0
+        total_savings = 0
+        total_investment = 0
+        
+        for country, result in forecast_results.items():
+            improvement = result['improvement_pct'] / 100
+            load_mean = result['load_mean_mw']
+            
+            carbon = self.carbon_analyzer.calculate_carbon_reduction(load_mean, improvement, country)
+            economic = self.economic_analyzer.calculate_economic_savings(
+                carbon['annual_energy_savings_mwh'],
+                carbon['annual_co2_reduction_tons']
+            )
+            
+            all_impacts.append({
+                'Country': country,
+                'R2': result['r2'],
+                'Improvement_Pct': result['improvement_pct'],
+                'RMSE_MW': result['rmse'],
+                'Load_Mean_MW': load_mean,
+                'CO2_Reduction_Tons': carbon['annual_co2_reduction_tons'],
+                'Annual_Savings_EUR': economic['total_annual_savings_eur'],
+                'Investment_EUR': economic['initial_investment_eur'],
+                'Payback_Years': economic['payback_period_years'],
+                'ROI_Pct': economic['roi_percentage']
+            })
+            
+            total_co2 += carbon['annual_co2_reduction_tons']
+            total_savings += economic['total_annual_savings_eur']
+            total_investment += economic['initial_investment_eur']
+            
+            print(f"\n{country}:")
+            print(f"  R²: {result['r2']:.4f}, Improvement: {result['improvement_pct']:.1f}%")
+            print(f"  CO2 Reduction: {carbon['annual_co2_reduction_tons']:,.0f} tons/year")
+            print(f"  Annual Savings: EUR{economic['total_annual_savings_eur']:,.0f}")
+            print(f"  Payback: {economic['payback_period_years']:.1f} years")
+            print(f"  ROI: {economic['roi_percentage']:.1f}%")
+        
+        df_impacts = pd.DataFrame(all_impacts)
+        df_impacts = df_impacts.sort_values('CO2_Reduction_Tons', ascending=False)
+        
+        print("\n" + "=" * 70)
+        print("SUMMARY STATISTICS")
+        print("=" * 70)
+        print(f"\nTotal CO2 Reduction: {total_co2:,.0f} tons/year")
+        print(f"Total Annual Savings: EUR{total_savings:,.0f}")
+        print(f"Total Investment: EUR{total_investment:,.0f}")
+        
+        print("\n" + "=" * 70)
+        print("TOP 10 COUNTRIES BY CO2 REDUCTION")
+        print("=" * 70)
+        print(df_impacts[['Country', 'R2', 'Improvement_Pct', 'CO2_Reduction_Tons', 'ROI_Pct', 'Payback_Years']].head(10).to_string(index=False))
+        
+        df_impacts.to_csv('complete_energy_analysis_31_countries.csv', index=False)
+        print("\nSaved to: complete_energy_analysis_31_countries.csv")
+        
+        self.forecast_results = forecast_results
+        self.impact_results = df_impacts
+        
+        return forecast_results, df_impacts
+    
+    def forecast_single_country(self, country_code, n_days=7):
+        print(f"\n{'='*60}")
+        print(f"FORECASTING FOR {country_code} ({n_days} days)")
+        print(f"{'='*60}")
+        
+        if country_code not in self.forecast_results:
+            print(f"Country {country_code} not trained yet. Running training...")
+            self.forecaster.load_data(n_samples=30000)
+            result = self.forecaster.train_country(country_code)
+            if not result:
+                print(f"Cannot forecast for {country_code}")
+                return None
+            self.forecast_results[country_code] = result
+        
+        return self.forecast_results[country_code]
+    
+    def generate_report(self):
+        print("\n" + "=" * 70)
+        print("FINAL REPORT")
+        print("=" * 70)
+        
+        if not self.impact_results.empty:
+            print("\nPERFORMANCE RANKING (by R²):")
+            print(self.impact_results[['Country', 'R2', 'Improvement_Pct']].head(10).to_string(index=False))
+            
+            print("\nENVIRONMENTAL IMPACT RANKING (by CO2 Reduction):")
+            print(self.impact_results[['Country', 'CO2_Reduction_Tons', 'ROI_Pct', 'Payback_Years']].head(10).to_string(index=False))
+            
+            total_co2 = self.impact_results['CO2_Reduction_Tons'].sum()
+            print(f"\n🌍 TOTAL ENVIRONMENTAL IMPACT:")
+            print(f"   CO2 Reduction: {total_co2:,.0f} tons/year")
+            print(f"   Equivalent cars removed: {int(total_co2/4.6):,}")
+            print(f"   Equivalent trees planted: {int(total_co2*20):,}")
+            
+            total_savings = self.impact_results['Annual_Savings_EUR'].sum()
+            total_investment = self.impact_results['Investment_EUR'].sum()
+            print(f"\n💰 TOTAL ECONOMIC IMPACT:")
+            print(f"   Annual Savings: EUR{total_savings:,.0f}")
+            print(f"   Investment Required: EUR{total_investment:,.0f}")
+            if total_savings > 0:
+                print(f"   Average Payback: {total_investment/total_savings:.1f} years")
+                print(f"   Average ROI: {(total_savings/total_investment)*100:.1f}%")
+
+
+# ============================================================================
+# MAIN
+# ============================================================================
+
 def main():
+    data_path = 'C:/Users/Zahara/Documents/Zoom/europe_energy_forecast/data/europe_energy_real.csv'
+    
+    analysis = CompleteEnergyAnalysis(data_path)
+    
+    forecast_results, impact_results = analysis.run_full_analysis()
+    
+    analysis.generate_report()
+    
+    print("\n" + "=" * 70)
+    print("PROCESS COMPLETED SUCCESSFULLY")
     print("=" * 70)
-    print("CARBON IMPACT ANALYSIS USING HYBRID ENSEMBLE RESULTS")
-    print("=" * 70)
-    
-    results = {
-        'FR': {'r2': 0.9948, 'load_mean': 54649, 'improvement': 62.9},
-        'IT': {'r2': 0.9940, 'load_mean': 32914, 'improvement': 73.8},
-        'AT': {'r2': 0.9939, 'load_mean': 7111, 'improvement': 70.3},
-        'DE': {'r2': 0.9938, 'load_mean': 55752, 'improvement': 69.8},
-        'FI': {'r2': 0.9931, 'load_mean': 9576, 'improvement': 52.3},
-        'PL': {'r2': 0.9930, 'load_mean': 18910, 'improvement': 68.5},
-        'NL': {'r2': 0.9928, 'load_mean': 12480, 'improvement': 71.0},
-        'LV': {'r2': 0.9927, 'load_mean': 823, 'improvement': 71.2},
-        'RO': {'r2': 0.9925, 'load_mean': 6747, 'improvement': 69.4},
-        'ES': {'r2': 0.9925, 'load_mean': 28668, 'improvement': 71.9},
-        'CZ': {'r2': 0.9922, 'load_mean': 7472, 'improvement': 63.3},
-        'BG': {'r2': 0.9919, 'load_mean': 4348, 'improvement': 65.4},
-        'HU': {'r2': 0.9916, 'load_mean': 4833, 'improvement': 68.6},
-        'EE': {'r2': 0.9913, 'load_mean': 941, 'improvement': 63.2},
-        'PT': {'r2': 0.9911, 'load_mean': 5660, 'improvement': 69.3},
-        'SE': {'r2': 0.9910, 'load_mean': 15836, 'improvement': 52.1},
-        'NO': {'r2': 0.9902, 'load_mean': 15251, 'improvement': 43.4},
-        'HR': {'r2': 0.9894, 'load_mean': 1981, 'improvement': 70.2},
-        'RS': {'r2': 0.9894, 'load_mean': 4496, 'improvement': 61.6},
-        'BE': {'r2': 0.9890, 'load_mean': 10007, 'improvement': 63.6},
-        'GR': {'r2': 0.9878, 'load_mean': 5801, 'improvement': 66.3},
-        'CY': {'r2': 0.9861, 'load_mean': 493, 'improvement': 64.5},
-        'LT': {'r2': 0.9859, 'load_mean': 1285, 'improvement': 61.2},
-        'IE': {'r2': 0.9852, 'load_mean': 3134, 'improvement': 62.0},
-        'SI': {'r2': 0.9850, 'load_mean': 1465, 'improvement': 60.5},
-        'ME': {'r2': 0.9848, 'load_mean': 378, 'improvement': 58.3},
-        'DK': {'r2': 0.9831, 'load_mean': 3742, 'improvement': 59.4},
-        'SK': {'r2': 0.9606, 'load_mean': 3318, 'improvement': 29.3},
-        'CH': {'r2': 0.9493, 'load_mean': 6758, 'improvement': 25.0},
-        'UA': {'r2': 0.9383, 'load_mean': 18336, 'improvement': 38.7},
-        'LU': {'r2': 0.8737, 'load_mean': 487, 'improvement': 2.7}
-    }
-    
-    carbon_analyzer = CarbonImpactAnalyzer()
-    economic_analyzer = EconomicAnalyzer()
-    
-    scenario_improvements = [0.01, 0.05, 0.10]
-    scenario_results = []
-    
-    all_country_results = []
-    
-    print("\n" + "="*70)
-    print("RESULTS BY COUNTRY (5% IMPROVEMENT SCENARIO)")
-    print("="*70)
-    
-    for country, data in results.items():
-        improvement_pct = data['improvement']
-        load_mean = data['load_mean']
-        
-        adj_improvement = improvement_pct / 100
-        
-        carbon = carbon_analyzer.calculate_carbon_reduction(load_mean, adj_improvement, country)
-        economic = economic_analyzer.calculate_economic_savings(
-            carbon['annual_energy_savings_mwh'], 
-            carbon['annual_co2_reduction_tons']
-        )
-        
-        all_country_results.append({
-            'Country': country,
-            'R2': data['r2'],
-            'Load_Mean_MW': load_mean,
-            'Improvement_Pct': improvement_pct,
-            'CO2_Reduction_Tons': carbon['annual_co2_reduction_tons'],
-            'Cars_Removed': carbon['equivalent_cars_removed'],
-            'Trees_Planted': carbon['equivalent_trees_planted'],
-            'Energy_Savings_MWh': carbon['annual_energy_savings_mwh'],
-            'Annual_Savings_EUR': economic['total_annual_savings_eur'],
-            'Investment_EUR': economic['initial_investment_eur'],
-            'Payback_Years': economic['payback_period_years'],
-            'ROI_Pct': economic['roi_percentage'],
-            'NPV_EUR': economic['npv_eur']
-        })
-        
-        print(f"\n{country}:")
-        print(f"  Model R²: {data['r2']:.4f}, Improvement: {improvement_pct:.1f}%")
-        print(f"  CO2 Reduction: {carbon['annual_co2_reduction_tons']:,.0f} tons/year")
-        print(f"  Annual Savings: EUR{economic['total_annual_savings_eur']:,.0f}")
-        print(f"  Payback: {economic['payback_period_years']:.1f} years")
-        print(f"  ROI: {economic['roi_percentage']:.1f}%")
-    
-    df_results = pd.DataFrame(all_country_results)
-    df_results = df_results.sort_values('CO2_Reduction_Tons', ascending=False)
-    
-    print("\n" + "="*70)
-    print("SCENARIO ANALYSIS (AT - 5% IMPROVEMENT)")
-    print("="*70)
-    
-    at_load = results['AT']['load_mean']
-    
-    for scenario in scenario_improvements:
-        carbon = carbon_analyzer.calculate_carbon_reduction(at_load, scenario, 'AT')
-        economic = economic_analyzer.calculate_economic_savings(
-            carbon['annual_energy_savings_mwh'],
-            carbon['annual_co2_reduction_tons']
-        )
-        
-        scenario_results.append({
-            'Scenario': f"{scenario*100:.0f}%",
-            'CO2_Reduction_Tons': carbon['annual_co2_reduction_tons'],
-            'Annual_Savings_EUR': economic['total_annual_savings_eur'],
-            'Payback_Years': economic['payback_period_years'],
-            'ROI_Pct': economic['roi_percentage']
-        })
-        
-        print(f"\n{scenario*100:.0f}% Improvement:")
-        print(f"  CO2 Reduction: {carbon['annual_co2_reduction_tons']:,.0f} tons/year")
-        print(f"  Annual Savings: EUR{economic['total_annual_savings_eur']:,.0f}")
-        print(f"  Payback: {economic['payback_period_years']:.1f} years")
-        print(f"  ROI: {economic['roi_percentage']:.1f}%")
-    
-    print("\n" + "="*70)
-    print("SUMMARY STATISTICS")
-    print("="*70)
-    
-    total_co2 = df_results['CO2_Reduction_Tons'].sum()
-    total_savings = df_results['Annual_Savings_EUR'].sum()
-    total_investment = df_results['Investment_EUR'].sum()
-    total_npv = df_results['NPV_EUR'].sum()
-    
-    print(f"\nTotal CO2 Reduction (31 countries): {total_co2:,.0f} tons/year")
-    print(f"Total Annual Savings: EUR{total_savings:,.0f}")
-    print(f"Total Investment: EUR{total_investment:,.0f}")
-    print(f"Total NPV (20 years): EUR{total_npv:,.0f}")
-    
-    df_results.to_csv('carbon_impact_31_countries_hybrid.csv', index=False)
-    pd.DataFrame(scenario_results).to_csv('carbon_impact_scenarios_at.csv', index=False)
-    
-    print("\n" + "="*70)
-    print("TOP 10 COUNTRIES BY CO2 REDUCTION")
-    print("="*70)
-    print(df_results[['Country', 'CO2_Reduction_Tons', 'ROI_Pct', 'Payback_Years']].head(10).to_string(index=False))
-    
-    print("\nFiles saved:")
-    print("  - carbon_impact_31_countries_hybrid.csv")
-    print("  - carbon_impact_scenarios_at.csv")
+    print("\nGenerated files:")
+    print("  - complete_energy_analysis_31_countries.csv")
 
 if __name__ == "__main__":
     main()
