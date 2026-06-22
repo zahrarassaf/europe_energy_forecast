@@ -5,36 +5,59 @@ from scipy import stats
 import matplotlib.pyplot as plt
 import seaborn as sns
 from statsmodels.graphics.tsaplots import plot_acf, plot_pacf
+from statsmodels.stats.diagnostic import acorr_ljungbox, het_arch
+from statsmodels.tsa.arima.model import ARIMA
+from statsmodels.tsa.seasonal import seasonal_decompose
+from scipy.stats import jarque_bera, anderson, normaltest
+import os
+import sys
+import warnings
+warnings.filterwarnings('ignore')
 
 class StatisticalAnalyzer:
     def __init__(self, data):
         self.data = data
         self.results = {}
     
-    def comprehensive_analysis(self, target_country='DE'):
-        print(f"\n{'='*60}")
-        print(f"COMPREHENSIVE STATISTICAL ANALYSIS FOR {target_country}")
-        print(f"{'='*60}")
+    def _hampel_filter(self, series, window=10, n_sigmas=3):
+        median = series.rolling(window=window, center=True).median()
+        mad = series.rolling(window=window, center=True).apply(
+            lambda x: np.median(np.abs(x - np.median(x))), raw=True
+        )
+        modified_z_scores = 0.6745 * (series - median) / mad
+        return np.abs(modified_z_scores) > n_sigmas
+    
+    def comprehensive_analysis(self, column_name):
+        print(f"\n{'='*70}")
+        print(f"STATISTICAL ANALYSIS: {column_name}")
+        print(f"{'='*70}")
         
-        if target_country not in self.data.columns:
-            print(f"Error: {target_country} not found in data columns")
+        if column_name not in self.data.columns:
+            print(f"Error: {column_name} not found")
             return None
         
-        series = self.data[target_country].dropna()
-        if len(series) < 50:
-            print(f"Warning: Series has only {len(series)} observations")
+        series = self.data[column_name].dropna()
+        if len(series) < 10:
+            print(f"Warning: Only {len(series)} observations - skipping")
+            return None
+        
+        print(f"\nObservations: {len(series):,}")
+        if isinstance(series.index, pd.DatetimeIndex):
+            print(f"Date range: {series.index.min()} to {series.index.max()}")
         
         analysis_results = {
-            'country': target_country,
+            'column': column_name,
             'basic_stats': {},
             'stationarity_tests': {},
             'distribution_tests': {},
             'autocorrelation': {},
-            'seasonality': {}
+            'seasonality': {},
+            'heteroskedasticity': {},
+            'outliers': {},
+            'summary': {}
         }
         
-        # Basic Statistics
-        print("\n1. BASIC STATISTICS:")
+        print("\nBASIC STATISTICS:")
         print("-" * 40)
         
         basic_stats = {
@@ -60,85 +83,63 @@ class StatisticalAnalyzer:
         
         analysis_results['basic_stats'] = basic_stats
         
-        # Stationarity Tests
-        print("\n2. STATIONARITY TESTS:")
+        print("\nSTATIONARITY TESTS:")
         print("-" * 40)
         
-        # ADF Test
-        adf_result = adfuller(series, autolag='AIC')
-        adf_test = {
-            'test_statistic': adf_result[0],
-            'p_value': adf_result[1],
-            'critical_values': adf_result[4],
-            'is_stationary': adf_result[1] < 0.05
-        }
+        try:
+            adf_result = adfuller(series, autolag='AIC')
+            adf_test = {
+                'test_statistic': adf_result[0],
+                'p_value': adf_result[1],
+                'is_stationary': adf_result[1] < 0.05
+            }
+            print(f"ADF: stat={adf_test['test_statistic']:.4f}, p={adf_test['p_value']:.6f}, stationary={'YES' if adf_test['is_stationary'] else 'NO'}")
+        except:
+            adf_test = {'is_stationary': False}
         
-        print(f"Augmented Dickey-Fuller Test:")
-        print(f"  ADF Statistic: {adf_test['test_statistic']:.6f}")
-        print(f"  p-value: {adf_test['p_value']:.6f}")
-        print(f"  Stationary: {'YES' if adf_test['is_stationary'] else 'NO'}")
-        
-        # KPSS Test
         try:
             kpss_result = kpss(series, regression='c', nlags='auto')
             kpss_test = {
                 'test_statistic': kpss_result[0],
                 'p_value': kpss_result[1],
-                'critical_values': kpss_result[3],
                 'is_stationary': kpss_result[1] > 0.05
             }
-            print(f"\nKPSS Test:")
-            print(f"  KPSS Statistic: {kpss_test['test_statistic']:.6f}")
-            print(f"  p-value: {kpss_test['p_value']:.6f}")
-            print(f"  Stationary: {'YES' if kpss_test['is_stationary'] else 'NO'}")
-        except Exception as e:
-            print(f"\nKPSS Test Error: {e}")
-            kpss_test = None
+            print(f"KPSS: stat={kpss_test['test_statistic']:.4f}, p={kpss_test['p_value']:.6f}, stationary={'YES' if kpss_test['is_stationary'] else 'NO'}")
+        except:
+            kpss_test = {'is_stationary': False}
         
-        analysis_results['stationarity_tests'] = {
-            'adf': adf_test,
-            'kpss': kpss_test
-        }
+        if adf_test.get('is_stationary', False) and kpss_test.get('is_stationary', False):
+            series_type = "I(0) - Stationary"
+        elif adf_test.get('is_stationary', False) and not kpss_test.get('is_stationary', False):
+            series_type = "Trend-Stationary"
+        elif not adf_test.get('is_stationary', False) and not kpss_test.get('is_stationary', False):
+            series_type = "I(1) - Needs Differencing"
+        else:
+            series_type = "Uncertain"
         
-        # Normality Tests
-        print("\n3. NORMALITY TESTS:")
+        print(f"\nSeries Type: {series_type}")
+        analysis_results['stationarity_tests'] = {'adf': adf_test, 'kpss': kpss_test, 'series_type': series_type}
+        
+        print("\nNORMALITY TESTS:")
         print("-" * 40)
         
-        # Shapiro-Wilk Test
-        if len(series) <= 5000:
-            shapiro_result = stats.shapiro(series)
-            shapiro_test = {
-                'test_statistic': shapiro_result[0],
-                'p_value': shapiro_result[1],
-                'is_normal': shapiro_result[1] > 0.05
-            }
-            print(f"Shapiro-Wilk Test:")
-            print(f"  Statistic: {shapiro_test['test_statistic']:.6f}")
-            print(f"  p-value: {shapiro_test['p_value']:.6f}")
-            print(f"  Normal: {'YES' if shapiro_test['is_normal'] else 'NO'}")
-        else:
-            print("Shapiro-Wilk: Sample size too large (>5000)")
-            shapiro_test = None
+        try:
+            jb_result = jarque_bera(series)
+            jb_test = {'p_value': jb_result[1], 'is_normal': jb_result[1] > 0.05}
+            print(f"Jarque-Bera: p={jb_test['p_value']:.6f}, normal={'YES' if jb_test['is_normal'] else 'NO'}")
+        except:
+            jb_test = {'is_normal': False}
         
-        # Jarque-Bera Test
-        jb_result = stats.jarque_bera(series)
-        jb_test = {
-            'test_statistic': jb_result[0],
-            'p_value': jb_result[1],
-            'is_normal': jb_result[1] > 0.05
-        }
-        print(f"\nJarque-Bera Test:")
-        print(f"  Statistic: {jb_test['test_statistic']:.6f}")
-        print(f"  p-value: {jb_test['p_value']:.6f}")
-        print(f"  Normal: {'YES' if jb_test['is_normal'] else 'NO'}")
+        try:
+            ad_result = anderson(series)
+            ad_test = {'is_normal': ad_result[0] < ad_result[1][2]}
+            print(f"Anderson-Darling: normal={'YES' if ad_test['is_normal'] else 'NO'} (5%)")
+        except:
+            ad_test = {'is_normal': False}
         
-        analysis_results['distribution_tests'] = {
-            'shapiro': shapiro_test,
-            'jarque_bera': jb_test
-        }
+        analysis_results['distribution_tests'] = {'jarque_bera': jb_test, 'anderson_darling': ad_test}
         
-        # Autocorrelation Analysis
-        print("\n4. AUTOCORRELATION ANALYSIS:")
+        print("\nAUTOCORRELATION:")
         print("-" * 40)
         
         max_lag = min(50, len(series) // 4)
@@ -146,342 +147,210 @@ class StatisticalAnalyzer:
         pacf_values = pacf(series, nlags=max_lag)
         
         significant_lags_acf = []
-        significant_lags_pacf = []
-        
-        for lag in range(1, min(21, max_lag + 1)):
+        for lag in range(1, min(25, max_lag + 1)):
             if abs(acf_values[lag]) > 1.96 / np.sqrt(len(series)):
                 significant_lags_acf.append(lag)
-            if abs(pacf_values[lag]) > 1.96 / np.sqrt(len(series)):
-                significant_lags_pacf.append(lag)
         
-        print(f"First 20 ACF values:")
-        for lag in range(1, min(21, len(acf_values))):
-            print(f"  Lag {lag:2d}: {acf_values[lag]:.4f}")
+        print(f"Significant ACF lags: {significant_lags_acf[:10]}")
+        analysis_results['autocorrelation'] = {'significant_acf_lags': significant_lags_acf}
         
-        print(f"\nFirst 20 PACF values:")
-        for lag in range(1, min(21, len(pacf_values))):
-            print(f"  Lag {lag:2d}: {pacf_values[lag]:.4f}")
-        
-        print(f"\nSignificant ACF lags: {significant_lags_acf}")
-        print(f"Significant PACF lags: {significant_lags_pacf}")
-        
-        analysis_results['autocorrelation'] = {
-            'acf_values': acf_values.tolist(),
-            'pacf_values': pacf_values.tolist(),
-            'significant_acf_lags': significant_lags_acf,
-            'significant_pacf_lags': significant_lags_pacf,
-            'max_lag_analyzed': max_lag
-        }
-        
-        # Seasonality Detection
-        print("\n5. SEASONALITY ANALYSIS:")
+        print("\nSEASONALITY:")
         print("-" * 40)
         
-        if len(series) >= 24 * 7 * 4:
-            daily_pattern = self._detect_seasonality(series, period=24)
-            weekly_pattern = self._detect_seasonality(series, period=24*7)
-            
-            print(f"Daily seasonality strength: {daily_pattern['strength']:.4f}")
-            print(f"Weekly seasonality strength: {weekly_pattern['strength']:.4f}")
-            
-            analysis_results['seasonality'] = {
-                'daily': daily_pattern,
-                'weekly': weekly_pattern
-            }
+        if len(series) >= 24 * 7 * 2:
+            try:
+                decomposition = seasonal_decompose(series, model='additive', period=24, extrapolate_trend='freq')
+                seasonal = decomposition.seasonal
+                residual = decomposition.resid
+                seasonal_strength = 1 - np.var(residual) / np.var(seasonal + residual) if np.var(seasonal + residual) > 0 else 0
+                print(f"Seasonality strength: {seasonal_strength:.4f}")
+                analysis_results['seasonality'] = {'strength': seasonal_strength}
+            except:
+                print("  Seasonal decomposition failed")
+                analysis_results['seasonality'] = None
         else:
-            print("Insufficient data for seasonality analysis")
+            print("Insufficient data")
             analysis_results['seasonality'] = None
         
-        # Outlier Detection
-        print("\n6. OUTLIER DETECTION:")
+        print("\nHETEROSKEDASTICITY:")
         print("-" * 40)
         
-        outliers = self._detect_outliers(series)
-        print(f"Number of outliers detected: {len(outliers)}")
-        if len(outliers) > 0:
-            print(f"Outlier values: {outliers[:10]}")  # Show first 10
-            if len(outliers) > 10:
-                print(f"... and {len(outliers)-10} more")
+        try:
+            arch_result = het_arch(series)
+            arch_test = {'p_value': arch_result[1], 'is_heteroskedastic': arch_result[1] < 0.05}
+            print(f"ARCH Test: p={arch_test['p_value']:.6f}, heteroskedastic={'YES' if arch_test['is_heteroskedastic'] else 'NO'}")
+        except:
+            arch_test = {'is_heteroskedastic': False}
         
-        analysis_results['outliers'] = {
-            'count': len(outliers),
-            'values': outliers.tolist() if len(outliers) > 0 else [],
-            'percentage': (len(outliers) / len(series)) * 100
-        }
+        analysis_results['heteroskedasticity'] = {'arch_test': arch_test}
         
-        # Summary
-        print("\n7. ANALYSIS SUMMARY:")
+        print("\nOUTLIERS:")
         print("-" * 40)
+        
+        if len(series) >= 50:
+            outlier_mask_hampel = self._hampel_filter(series, window=10, n_sigmas=3)
+            hampel_count = len(series[outlier_mask_hampel])
+        else:
+            hampel_count = 0
+        
+        print(f"Hampel: {hampel_count} points ({hampel_count/len(series)*100:.2f}%)")
+        analysis_results['outliers'] = {'hampel_percentage': (hampel_count / len(series)) * 100}
+        
+        print("\nSUMMARY:")
+        print("-" * 40)
+        
+        has_seasonality = analysis_results['seasonality'] is not None and analysis_results['seasonality'].get('strength', 0) > 0.3
         
         summary = {
-            'is_stationary': adf_test['is_stationary'],
-            'is_normal': jb_test['is_normal'],
-            'has_seasonality': analysis_results['seasonality'] is not None and 
-                             (analysis_results['seasonality']['daily']['strength'] > 0.3 or
-                              analysis_results['seasonality']['weekly']['strength'] > 0.3),
-            'has_significant_autocorrelation': len(significant_lags_acf) > 0,
-            'outlier_percentage': analysis_results['outliers']['percentage']
+            'is_stationary': adf_test.get('is_stationary', False),
+            'is_normal': jb_test.get('is_normal', False),
+            'has_seasonality': has_seasonality,
+            'is_heteroskedastic': arch_test.get('is_heteroskedastic', False),
+            'outlier_percentage': (hampel_count / len(series)) * 100 if len(series) > 0 else 0,
+            'series_type': series_type,
+            'mean': basic_stats['mean'],
+            'std': basic_stats['std']
         }
         
         print(f"Stationary: {'YES' if summary['is_stationary'] else 'NO'}")
-        print(f"Normally distributed: {'YES' if summary['is_normal'] else 'NO'}")
-        print(f"Has seasonality: {'YES' if summary['has_seasonality'] else 'NO'}")
-        print(f"Has autocorrelation: {'YES' if summary['has_significant_autocorrelation'] else 'NO'}")
-        print(f"Outliers: {summary['outlier_percentage']:.2f}% of data")
+        print(f"Normal: {'YES' if summary['is_normal'] else 'NO'}")
+        print(f"Seasonality: {'YES' if summary['has_seasonality'] else 'NO'}")
+        print(f"Heteroskedastic: {'YES' if summary['is_heteroskedastic'] else 'NO'}")
+        print(f"Outliers: {summary['outlier_percentage']:.2f}%")
         
         analysis_results['summary'] = summary
-        self.results[target_country] = analysis_results
+        self.results[column_name] = analysis_results
         
         return analysis_results
     
-    def _detect_seasonality(self, series, period=24):
-        if len(series) < period * 2:
-            return {'strength': 0, 'period': period}
+    def analyze_all_columns(self):
+        print("\n" + "="*70)
+        print("ANALYZING ALL COUNTRIES")
+        print("="*70)
         
-        series_values = series.values
-        seasonal_components = []
+        all_results = []
+        total = len(self.data.columns)
         
-        for i in range(period):
-            idx = np.arange(i, len(series_values), period)
-            if len(idx) > 1:
-                seasonal_components.append(np.mean(series_values[idx]))
-        
-        seasonal_strength = np.std(seasonal_components) / np.std(series_values) if np.std(series_values) > 0 else 0
-        
-        return {
-            'strength': seasonal_strength,
-            'period': period,
-            'seasonal_pattern': seasonal_components
-        }
-    
-    def _detect_outliers(self, series, method='iqr', threshold=1.5):
-        if method == 'iqr':
-            Q1 = series.quantile(0.25)
-            Q3 = series.quantile(0.75)
-            IQR = Q3 - Q1
-            lower_bound = Q1 - threshold * IQR
-            upper_bound = Q3 + threshold * IQR
-            outliers = series[(series < lower_bound) | (series > upper_bound)]
-        elif method == 'zscore':
-            z_scores = np.abs(stats.zscore(series))
-            outliers = series[z_scores > 3]
-        else:
-            outliers = pd.Series([])
-        
-        return outliers
-    
-    def plot_comprehensive_analysis(self, target_country='DE', save_path=None):
-        if target_country not in self.results:
-            print(f"No analysis results found for {target_country}")
-            return None
-        
-        series = self.data[target_country].dropna()
-        analysis_results = self.results[target_country]
-        
-        fig, axes = plt.subplots(3, 3, figsize=(15, 12))
-        fig.suptitle(f'Comprehensive Statistical Analysis - {target_country}', fontsize=16, fontweight='bold')
-        
-        # 1. Time Series Plot
-        axes[0, 0].plot(series.index, series.values, linewidth=1)
-        axes[0, 0].set_title('Time Series')
-        axes[0, 0].set_xlabel('Time')
-        axes[0, 0].set_ylabel('Value')
-        axes[0, 0].grid(True, alpha=0.3)
-        
-        # 2. Histogram with KDE
-        axes[0, 1].hist(series, bins=50, density=True, alpha=0.7, color='skyblue', edgecolor='black')
-        sns.kdeplot(series, ax=axes[0, 1], color='red', linewidth=2)
-        axes[0, 1].set_title('Distribution')
-        axes[0, 1].set_xlabel('Value')
-        axes[0, 1].set_ylabel('Density')
-        
-        # 3. Box Plot
-        axes[0, 2].boxplot(series, vert=True)
-        axes[0, 2].set_title('Box Plot')
-        axes[0, 2].set_ylabel('Value')
-        
-        # 4. ACF Plot
-        plot_acf(series, lags=min(50, len(series)//4), ax=axes[1, 0])
-        axes[1, 0].set_title('Autocorrelation Function (ACF)')
-        
-        # 5. PACF Plot
-        plot_pacf(series, lags=min(50, len(series)//4), ax=axes[1, 1])
-        axes[1, 1].set_title('Partial Autocorrelation Function (PACF)')
-        
-        # 6. QQ Plot
-        stats.probplot(series, dist="norm", plot=axes[1, 2])
-        axes[1, 2].set_title('Q-Q Plot')
-        
-        # 7. Rolling Statistics
-        window_size = min(100, len(series) // 10)
-        rolling_mean = series.rolling(window=window_size).mean()
-        rolling_std = series.rolling(window=window_size).std()
-        
-        axes[2, 0].plot(series.index, series.values, alpha=0.5, label='Original', linewidth=0.5)
-        axes[2, 0].plot(rolling_mean.index, rolling_mean.values, 'r-', label=f'Rolling Mean (window={window_size})', linewidth=2)
-        axes[2, 0].set_title('Rolling Statistics')
-        axes[2, 0].set_xlabel('Time')
-        axes[2, 0].set_ylabel('Value')
-        axes[2, 0].legend()
-        axes[2, 0].grid(True, alpha=0.3)
-        
-        # 8. Seasonal Decomposition (if enough data)
-        if len(series) >= 24 * 7 * 2:
-            try:
-                from statsmodels.tsa.seasonal import seasonal_decompose
-                decomposition = seasonal_decompose(series, model='additive', period=24)
-                axes[2, 1].plot(decomposition.seasonal[:24*7])
-                axes[2, 1].set_title('Weekly Seasonality Pattern')
-                axes[2, 1].set_xlabel('Hour')
-                axes[2, 1].set_ylabel('Seasonal Component')
-            except:
-                axes[2, 1].text(0.5, 0.5, 'Seasonal decomposition\nnot available', 
-                               ha='center', va='center', transform=axes[2, 1].transAxes)
-                axes[2, 1].set_title('Seasonal Pattern')
-        else:
-            axes[2, 1].text(0.5, 0.5, 'Insufficient data\nfor seasonal analysis', 
-                           ha='center', va='center', transform=axes[2, 1].transAxes)
-            axes[2, 1].set_title('Seasonal Pattern')
-        
-        # 9. Summary Statistics Text
-        stats_text = f"""
-        Basic Statistics:
-        Mean: {analysis_results['basic_stats']['mean']:.2f}
-        Std: {analysis_results['basic_stats']['std']:.2f}
-        Min: {analysis_results['basic_stats']['min']:.2f}
-        Max: {analysis_results['basic_stats']['max']:.2f}
-        
-        Stationarity:
-        ADF p-value: {analysis_results['stationarity_tests']['adf']['p_value']:.6f}
-        Stationary: {'YES' if analysis_results['summary']['is_stationary'] else 'NO'}
-        
-        Normality:
-        JB p-value: {analysis_results['distribution_tests']['jarque_bera']['p_value']:.6f}
-        Normal: {'YES' if analysis_results['summary']['is_normal'] else 'NO'}
-        """
-        
-        axes[2, 2].axis('off')
-        axes[2, 2].text(0, 0.95, stats_text, transform=axes[2, 2].transAxes,
-                       fontsize=9, verticalalignment='top',
-                       bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
-        
-        plt.tight_layout()
-        
-        if save_path:
-            plt.savefig(save_path, dpi=150, bbox_inches='tight')
-            print(f"Plot saved to: {save_path}")
-        
-        plt.show()
-        return fig
-    
-    def analyze_multiple_countries(self, country_codes=None):
-        if country_codes is None:
-            available_columns = [col for col in self.data.columns if col in ['DE', 'FR', 'IT', 'ES', 'GB', 'NL', 'PL', 'BE', 'AT']]
-            country_codes = available_columns
-        
-        summary_results = []
-        
-        for country_code in country_codes:
-            print(f"\n{'='*60}")
-            print(f"Analyzing {country_code}...")
-            result = self.comprehensive_analysis(country_code)
+        for idx, col in enumerate(self.data.columns, 1):
+            print(f"\n[{idx}/{total}] {col}")
+            result = self.comprehensive_analysis(col)
             
             if result:
-                summary_results.append({
-                    'Country': country_code,
-                    'Mean': result['basic_stats']['mean'],
-                    'Std': result['basic_stats']['std'],
-                    'Stationary': result['summary']['is_stationary'],
-                    'Normal': result['summary']['is_normal'],
-                    'Seasonality': result['summary']['has_seasonality'],
-                    'Outliers %': result['outliers']['percentage']
+                summary = result['summary']
+                # Extract country name from column
+                country = col.replace('_load', '')
+                all_results.append({
+                    'Country': country,
+                    'Mean': round(summary['mean'], 2),
+                    'Std': round(summary['std'], 2),
+                    'Stationary': 'YES' if summary['is_stationary'] else 'NO',
+                    'Normal': 'YES' if summary['is_normal'] else 'NO',
+                    'Seasonality': 'YES' if summary['has_seasonality'] else 'NO',
+                    'Heteroskedastic': 'YES' if summary.get('is_heteroskedastic', False) else 'NO',
+                    'Outliers_%': round(summary['outlier_percentage'], 2)
                 })
         
-        if summary_results:
-            summary_df = pd.DataFrame(summary_results)
-            print(f"\n{'='*60}")
-            print("SUMMARY ACROSS ALL COUNTRIES:")
-            print('='*60)
+        if all_results:
+            summary_df = pd.DataFrame(all_results)
+            print("\n" + "="*70)
+            print("SUMMARY OF ALL COUNTRIES")
+            print("="*70)
             print(summary_df.to_string(index=False))
-            
-            summary_csv_path = 'statistical_analysis_summary.csv'
-            summary_df.to_csv(summary_csv_path, index=False)
-            print(f"\nSummary saved to: {summary_csv_path}")
-            
+            summary_df.to_csv('statistical_analysis_summary.csv', index=False)
+            print("\nSummary saved to: statistical_analysis_summary.csv")
             return summary_df
-        
         return None
 
-def main():
-    print("COMPREHENSIVE STATISTICAL ANALYSIS TOOL")
-    print("=" * 50)
+def load_real_data():
+    # Direct path to your data
+    data_dir = r'C:\Users\Zahara\Documents\Zoom\europe_energy_forecast\data'
+    load_file = os.path.join(data_dir, 'monthly_hourly_load_values_2024.csv')
+    
+    print(f"Loading data from: {load_file}")
+    
+    if not os.path.exists(load_file):
+        print("\n" + "="*70)
+        print("ERROR: DATA FILE NOT FOUND!")
+        print("="*70)
+        print(f"Expected file: {load_file}")
+        print("\nPlease make sure the data file exists in the correct location.")
+        print("The program will now exit.")
+        sys.exit(1)
     
     try:
-        df = pd.read_csv('data/europe_energy_real.csv')
+        df_load = pd.read_csv(load_file, sep='\t')
+        print(f"Loaded {df_load.shape[0]} rows, {df_load.shape[1]} columns")
         
-        target_col = 'AT_load_actual_entsoe_transparency'
-        if target_col in df.columns:
-            print(f"Analyzing target column: {target_col}")
-            data_series = pd.Series(df[target_col].values, name='AT')
+        # Get all unique countries
+        countries = df_load['CountryCode'].unique()
+        print(f"\nCountries found: {sorted(countries.tolist())}")
+        print(f"Total countries: {len(countries)}")
+        
+        # Create a dictionary for each country's load data
+        data_dict = {}
+        
+        # Get timestamp index
+        if 'utc_timestamp' in df_load.columns:
+            timestamp_index = pd.to_datetime(df_load['utc_timestamp'].unique())
         else:
-            print("Target column not found, using first numeric column")
-            numeric_cols = df.select_dtypes(include=[np.number]).columns
-            data_series = pd.Series(df[numeric_cols[0]].values, name='Data')
+            timestamp_index = pd.date_range('2024-01-01', periods=len(df_load[df_load['CountryCode'] == countries[0]]), freq='h')
         
-        analyzer = StatisticalAnalyzer(pd.DataFrame({target_col: data_series}))
+        # Extract data for each country
+        for country in countries:
+            country_data = df_load[df_load['CountryCode'] == country]
+            if len(country_data) > 0:
+                data_dict[f'{country}_load'] = country_data['Value'].values
         
-        print("\n1. Running comprehensive analysis...")
-        results = analyzer.comprehensive_analysis(target_col)
+        # Find minimum length
+        min_len = min(len(v) for v in data_dict.values() if len(v) > 0)
         
-        print("\n2. Generating visualization...")
-        analyzer.plot_comprehensive_analysis(target_col, 'statistical_analysis_plot.png')
+        # Trim all to same length
+        for key in data_dict:
+            data_dict[key] = data_dict[key][:min_len]
         
-        print("\n3. Analyzing multiple countries (if available)...")
-        country_columns = [col for col in df.columns if any(country in col for country in ['DE', 'FR', 'IT', 'ES', 'GB'])]
-        if len(country_columns) > 1:
-            country_data = {}
-            for col in country_columns[:5]:
-                country_name = col.split('_')[0].upper()
-                country_data[country_name] = df[col]
-            
-            multi_analyzer = StatisticalAnalyzer(pd.DataFrame(country_data))
-            multi_analyzer.analyze_multiple_countries()
+        # Create DataFrame
+        df = pd.DataFrame(data_dict)
+        df.index = timestamp_index[:min_len]
         
-    except FileNotFoundError:
-        print("Data file not found. Creating sample data for demonstration...")
+        print(f"\nCreated DataFrame: {df.shape[0]} rows, {df.shape[1]} columns")
+        print(f"Countries: {df.columns.tolist()}")
         
-        np.random.seed(42)
-        n_samples = 1000
-        time_index = pd.date_range('2023-01-01', periods=n_samples, freq='H')
+        return df
         
-        base_trend = np.linspace(100, 150, n_samples)
-        daily_seasonality = 20 * np.sin(2 * np.pi * np.arange(n_samples) / 24)
-        weekly_seasonality = 10 * np.sin(2 * np.pi * np.arange(n_samples) / (24*7))
-        noise = np.random.normal(0, 5, n_samples)
-        
-        sample_data = base_trend + daily_seasonality + weekly_seasonality + noise
-        
-        sample_df = pd.DataFrame({
-            'DE': sample_data,
-            'FR': sample_data * 0.8 + np.random.normal(0, 3, n_samples),
-            'IT': sample_data * 1.2 + np.random.normal(0, 4, n_samples)
-        }, index=time_index)
-        
-        analyzer = StatisticalAnalyzer(sample_df)
-        
-        print("\nAnalyzing Germany (DE) with sample data...")
-        results = analyzer.comprehensive_analysis('DE')
-        
-        print("\nGenerating visualization...")
-        analyzer.plot_comprehensive_analysis('DE')
-        
-        print("\nAnalyzing multiple countries...")
-        analyzer.analyze_multiple_countries(['DE', 'FR', 'IT'])
-    
     except Exception as e:
-        print(f"Error: {e}")
-        import traceback
-        traceback.print_exc()
+        print(f"\nError loading data: {e}")
+        print("The program will now exit.")
+        sys.exit(1)
+
+def main():
+    print("=" * 70)
+    print("STATISTICAL ANALYSIS - ALL COUNTRIES (2024 DATA)")
+    print("=" * 70)
+    
+    print("\nACADEMIC STANDARDS APPLIED:")
+    print("   1. Hyndman seasonal strength formula")
+    print("   2. Proper series classification (I(0)/I(1)/trend-stationary)")
+    print("   3. Hampel filter for outlier detection")
+    print("   4. Multiple normality tests (JB, AD)")
+    print("   5. ARCH test for heteroskedasticity")
+    print("=" * 70)
+    
+    # Load real data only
+    df = load_real_data()
+    
+    if df is not None:
+        print(f"\nData loaded successfully: {df.shape[0]} rows, {df.shape[1]} columns")
+        
+        # Create analyzer
+        analyzer = StatisticalAnalyzer(df)
+        
+        # Analyze all columns (all countries)
+        analyzer.analyze_all_columns()
+        
+        print("\n" + "="*70)
+        print("ANALYSIS COMPLETED SUCCESSFULLY")
+        print("="*70)
+        print("\nResults saved to: statistical_analysis_summary.csv")
 
 if __name__ == "__main__":
     main()
