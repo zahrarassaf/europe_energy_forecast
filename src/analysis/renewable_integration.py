@@ -5,6 +5,7 @@ from typing import Dict, List, Optional, Tuple
 import warnings
 import re
 import os
+import sys
 from datetime import datetime
 
 warnings.filterwarnings('ignore')
@@ -186,15 +187,15 @@ class RenewableIntegrationAnalyzer:
         print(f"Looking for data in: {data_dir}")
         
         if not os.path.exists(load_file):
-            print(f"   File not found: {load_file}")
+            print(f"   ERROR: File not found: {load_file}")
             return None
         
         if not os.path.exists(gen_file):
-            print(f"   File not found: {gen_file}")
+            print(f"   ERROR: File not found: {gen_file}")
             return None
         
         if not os.path.exists(flows_file):
-            print(f"   File not found: {flows_file}")
+            print(f"   ERROR: File not found: {flows_file}")
             return None
         
         try:
@@ -215,8 +216,6 @@ class RenewableIntegrationAnalyzer:
         print(f"   Load data: {df_load.shape[0]:,} rows")
         print(f"   Generation data: {df_gen.shape[0]:,} rows")
         print(f"   Flows data: {df_flows.shape[0]:,} rows")
-        print(f"   Gen columns: {df_gen.columns.tolist()}")
-        print(f"   Flows columns: {df_flows.columns.tolist()}")
         
         area_col = 'Area'
         category_col = 'Category'
@@ -243,7 +242,6 @@ class RenewableIntegrationAnalyzer:
         print(f"   Using generation columns: Area='{area_col}', Category='{category_col}', Value='{value_col}'")
         
         df_gen[value_col] = pd.to_numeric(df_gen[value_col], errors='coerce')
-        print(f"   Total generation sum: {df_gen[value_col].sum():,.0f} GWh")
         
         from_area_col = 'FromAreaCode'
         to_area_col = 'ToAreaCode'
@@ -279,6 +277,8 @@ class RenewableIntegrationAnalyzer:
         df_flows[value_flow_col] = pd.to_numeric(df_flows[value_flow_col], errors='coerce')
         
         countries = df_load['CountryCode'].unique()
+        print(f"\n   Countries found: {len(countries)}")
+        
         results = []
         
         for country in countries:
@@ -301,8 +301,8 @@ class RenewableIntegrationAnalyzer:
                            'Fossil Oil', 'Fossil Peat', 'Fossil Coal-derived gas']
             fossil_gen = country_gen[country_gen[category_col].isin(fossil_cats)][value_col].sum()
             
-            imports = df_flows[(df_flows[to_area_col] == country) & (df_flows[direction_col] == 'Import')][value_flow_col].sum()
-            exports = df_flows[(df_flows[from_area_col] == country) & (df_flows[direction_col] == 'Export')][value_flow_col].sum()
+            imports = df_flows[(df_flows[to_area_col].str.strip() == country) & (df_flows[direction_col].str.strip() == 'Import')][value_flow_col].sum()
+            exports = df_flows[(df_flows[from_area_col].str.strip() == country) & (df_flows[direction_col].str.strip() == 'Export')][value_flow_col].sum()
             net_imports = imports - exports
             
             if total_load_gwh > 0:
@@ -713,15 +713,17 @@ class RenewableIntegrationAnalyzer:
         plt.show()
         return fig
     
-    def analyze_multiple_countries(self, df: pd.DataFrame, country_codes: Optional[List[str]] = None) -> Dict:
-        if country_codes is None:
-            country_codes = ['DE', 'FR', 'IT', 'ES', 'GB', 'NL', 'PL', 'BE', 'AT']
-        
+    def analyze_all_countries(self, df: pd.DataFrame) -> Dict:
+        countries = df_load['CountryCode'].unique()
         results = {}
         successful = 0
         failed = 0
         
-        for country_code in country_codes:
+        print(f"\n{'='*70}")
+        print(f"ANALYZING ALL {len(countries)} COUNTRIES")
+        print(f"{'='*70}")
+        
+        for country_code in countries:
             print(f"\n{'='*50}")
             print(f"Analyzing {country_code}...")
             print(f"{'='*50}")
@@ -733,20 +735,12 @@ class RenewableIntegrationAnalyzer:
             else:
                 failed += 1
         
-        print(f"\n Multi-country analysis complete: {successful} successful, {failed} failed")
+        print(f"\n Analysis complete: {successful} successful, {failed} failed")
         return results
     
     def run_complete_analysis(self):
         print("=" * 70)
-        print("RENEWABLE INTEGRATION ANALYSIS TOOL - COMPLETE VERSION")
-        print("=" * 70)
-        print("\nFEATURES:")
-        print("   1. Automatic detection of available data sources")
-        print("   2. Time series analysis from CSV data")
-        print("   3. Direct analysis from 2024 ENTSO-E data")
-        print("   4. Multi-country comparison")
-        print("   5. Hydro, nuclear, and fossil fuel breakdown")
-        print("   6. CO2 emission calculations")
+        print("RENEWABLE INTEGRATION ANALYSIS TOOL - ALL COUNTRIES")
         print("=" * 70)
         
         base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -758,262 +752,85 @@ class RenewableIntegrationAnalyzer:
         gen_file_2024 = os.path.join(data_dir, 'monthly_domestic_values_2024.csv')
         flows_file_2024 = os.path.join(data_dir, 'physical_energy_power_flows_2024.csv')
         
-        if os.path.exists(load_file_2024) and os.path.exists(gen_file_2024) and os.path.exists(flows_file_2024):
-            print("\n" + "="*60)
-            print("CHECKING FOR 2024 DATA...")
-            print("="*60)
-            print("   2024 data found! Running analysis...")
-            
-            result = self.analyze_from_2024_data()
-            if result is not None:
-                results_df, df_gen, df_load, df_flows = result
-                
-                if len(results_df) == 0:
-                    print("No results from 2024 data. Trying CSV data...")
-                else:
-                    print("\n" + "="*100)
-                    print("EUROPEAN RENEWABLE INTEGRATION SUMMARY 2024")
-                    print("="*100)
-                    print(f"\n{'Country':<6} {'Load':>12} {'Renewable':>12} {'Ren%':>6} {'Nuclear':>10} {'Nuc%':>5} {'Fossil':>10} {'Fos%':>5} {'NetImp':>10} {'Net%':>5}")
-                    print("-"*100)
-                    
-                    for _, r in results_df.iterrows():
-                        print(f"{r['Country']:<6} {r['Load_GWh']:>12,} {r['Renewable_GWh']:>12,} {r['Renewable_Pct']:>5.1f}% "
-                              f"{r['Nuclear_GWh']:>10,} {r['Nuclear_Pct']:>4.1f}% {r['Fossil_GWh']:>10,} {r['Fossil_Pct']:>4.1f}% "
-                              f"{r['Net_Imports_GWh']:>10,} {r['Net_Imports_Pct']:>5.1f}%")
-                    
-                    results_df.to_csv('renewable_integration_results_2024.csv', index=False)
-                    print("\nResults saved to: renewable_integration_results_2024.csv")
-                    
-                    fig, ax = plt.subplots(figsize=(12, 6))
-                    top10 = results_df.head(10)
-                    colors = ['#2ecc71' if x >= 50 else '#f39c12' if x >= 30 else '#e74c3c' for x in top10['Renewable_Pct']]
-                    ax.barh(top10['Country'], top10['Renewable_Pct'], color=colors)
-                    ax.set_xlabel('Renewable Penetration (% of Load)', fontsize=12)
-                    ax.set_title('Top 10 Countries - Renewable Energy Share 2024', fontsize=14, fontweight='bold')
-                    for bar, pct in zip(ax.patches, top10['Renewable_Pct']):
-                        ax.text(bar.get_width() + 1, bar.get_y() + bar.get_height()/2, f'{pct:.1f}%', ha='left', va='center', fontsize=9)
-                    ax.axvline(x=50, color='green', linestyle='--', label='50% Target')
-                    ax.axvline(x=30, color='orange', linestyle='--', label='30% Baseline')
-                    ax.legend()
-                    ax.grid(True, alpha=0.3, axis='x')
-                    plt.tight_layout()
-                    plt.savefig('renewable_2024_chart.png', dpi=150)
-                    print("Chart saved to: renewable_2024_chart.png")
-                    
-                    print("\n" + "="*60)
-                    print("2024 ANALYSIS COMPLETED SUCCESSFULLY")
-                    print("="*60)
-                    return
+        if not os.path.exists(load_file_2024):
+            print("\n" + "="*70)
+            print("ERROR: DATA FILES NOT FOUND!")
+            print("="*70)
+            print(f"Expected file: {load_file_2024}")
+            print("\nPlease make sure the data files exist in the correct location.")
+            print("The program will now exit.")
+            sys.exit(1)
         
-        csv_file = os.path.join(data_dir, 'europe_energy_real.csv')
+        if not os.path.exists(gen_file_2024):
+            print("\n" + "="*70)
+            print("ERROR: DATA FILES NOT FOUND!")
+            print("="*70)
+            print(f"Expected file: {gen_file_2024}")
+            print("\nPlease make sure the data files exist in the correct location.")
+            print("The program will now exit.")
+            sys.exit(1)
         
-        if os.path.exists(csv_file):
-            print(f"\nFound CSV file: {csv_file}")
-            try:
-                df = pd.read_csv(csv_file)
-                print(f"Data loaded: {df.shape[0]} rows, {df.shape[1]} columns")
-                
-                if 'utc_timestamp' in df.columns:
-                    df['utc_timestamp'] = pd.to_datetime(df['utc_timestamp'])
-                    df.set_index('utc_timestamp', inplace=True)
-                    print(f"Date range: {df.index.min()} to {df.index.max()}")
-                
-                country_codes = ['DE', 'FR', 'IT', 'ES', 'GB', 'NL', 'PL', 'BE', 'AT']
-                
-                print(f"\nAnalyzing {len(country_codes)} countries...")
-                all_results = self.analyze_multiple_countries(df, country_codes)
-                
-                if all_results:
-                    print(f"\n{'='*70}")
-                    print("EUROPEAN RENEWABLE INTEGRATION SUMMARY")
-                    print("="*70)
-                    
-                    summary_data = []
-                    for country_code, result in all_results.items():
-                        sources = result['renewable_sources']
-                        
-                        summary_data.append({
-                            'Country': country_code,
-                            'Solar_%': sources.get('solar', {}).get('penetration_percent', 0),
-                            'Wind_%': sources.get('wind', {}).get('penetration_percent', 0),
-                            'Hydro_%': sources.get('hydro', {}).get('penetration_percent', 0),
-                            'Biomass_%': sources.get('biomass', {}).get('penetration_percent', 0),
-                            'Nuclear_%': sources.get('nuclear', {}).get('penetration_percent', 0),
-                            'Total_RE_%': result['total_renewable_percent'],
-                            'Load_GWh': result['total_annual_load_gwh']
-                        })
-                    
-                    summary_df = pd.DataFrame(summary_data)
-                    summary_df = summary_df.sort_values('Total_RE_%', ascending=False)
-                    print("\n", summary_df.to_string(index=False))
-                    
-                    summary_df.to_csv('renewable_integration_summary.csv', index=False)
-                    print(f"\nSummary saved to: renewable_integration_summary.csv")
-                    
-                    first_country = list(all_results.keys())[0]
-                    print(f"\nCreating detailed report for {first_country}...")
-                    self.create_integration_report(df, first_country)
-                    
-                    print(f"\nCreating bar chart for {first_country}...")
-                    self.plot_renewable_mix(df, first_country, f'{first_country}_renewable_mix.png')
-                    return
-                
-            except Exception as e:
-                print(f"Error loading CSV: {e}")
+        if not os.path.exists(flows_file_2024):
+            print("\n" + "="*70)
+            print("ERROR: DATA FILES NOT FOUND!")
+            print("="*70)
+            print(f"Expected file: {flows_file_2024}")
+            print("\nPlease make sure the data files exist in the correct location.")
+            print("The program will now exit.")
+            sys.exit(1)
         
         print("\n" + "="*60)
-        print("NO DATA FILES FOUND OR NO RESULTS")
+        print("CHECKING FOR 2024 DATA...")
         print("="*60)
-        print("\nRunning with synthetic data...")
+        print("   2024 data found! Running analysis...")
         
-        self.run_with_synthetic_data()
-    
-    def run_with_synthetic_data(self):
-        print("\nGenerating synthetic data for testing...")
-        
-        hours = 8760
-        dates_hourly = pd.date_range('2024-01-01', periods=hours, freq='h')
-        
-        np.random.seed(42)
-        n = hours
-        
-        time_factor = np.sin(2 * np.pi * np.arange(n) / 8760) * 0.3 + 0.7
-        daily_pattern = 0.7 + 0.3 * np.sin(2 * np.pi * np.arange(n) / 24)
-        
-        data = {
-            'DE_load_actual': np.random.normal(55000, 5000, n) * time_factor,
-            'DE_solar_generation': np.random.normal(8000, 2000, n) * daily_pattern,
-            'DE_wind_generation': np.random.normal(15000, 4000, n) * (0.5 + np.random.rand(n) * 0.5),
-            'DE_hydro_generation': np.random.normal(3000, 500, n) * 0.8,
-            'DE_nuclear_generation': np.random.normal(6000, 200, n) * 0.9,
-            'DE_biomass_generation': np.random.normal(2500, 300, n) * 0.85,
-            'FR_load_actual': np.random.normal(45000, 4000, n) * time_factor,
-            'FR_solar_generation': np.random.normal(5000, 1500, n) * daily_pattern,
-            'FR_wind_generation': np.random.normal(10000, 3000, n) * (0.5 + np.random.rand(n) * 0.5),
-            'FR_hydro_generation': np.random.normal(8000, 1000, n) * 0.9,
-            'FR_nuclear_generation': np.random.normal(35000, 2000, n) * 0.95,
-            'FR_biomass_generation': np.random.normal(1500, 200, n) * 0.8,
-            'IT_load_actual': np.random.normal(35000, 3000, n) * time_factor,
-            'IT_solar_generation': np.random.normal(7000, 1500, n) * daily_pattern,
-            'IT_wind_generation': np.random.normal(5000, 1500, n) * (0.5 + np.random.rand(n) * 0.5),
-            'IT_hydro_generation': np.random.normal(4000, 600, n) * 0.85,
-            'ES_load_actual': np.random.normal(30000, 2500, n) * time_factor,
-            'ES_solar_generation': np.random.normal(9000, 2000, n) * daily_pattern,
-            'ES_wind_generation': np.random.normal(8000, 2000, n) * (0.5 + np.random.rand(n) * 0.5),
-            'ES_hydro_generation': np.random.normal(3000, 500, n) * 0.8,
-            'ES_nuclear_generation': np.random.normal(5000, 200, n) * 0.95,
-            'GB_load_actual': np.random.normal(40000, 3500, n) * time_factor,
-            'GB_wind_generation': np.random.normal(12000, 3000, n) * (0.5 + np.random.rand(n) * 0.5),
-            'GB_solar_generation': np.random.normal(3000, 1000, n) * daily_pattern,
-            'GB_nuclear_generation': np.random.normal(8000, 500, n) * 0.95,
-        }
-        
-        for col in data:
-            data[col] = np.maximum(data[col], 0)
-        
-        df = pd.DataFrame(data, index=dates_hourly)
-        
-        print(f"Synthetic data created: {df.shape[0]} hours, {df.shape[1]} columns")
-        print(f"Date range: {df.index.min()} to {df.index.max()}")
-        
-        countries = ['DE', 'FR', 'IT', 'ES', 'GB']
-        results = []
-        
-        for country in countries:
-            print(f"\n{'='*50}")
-            print(f"Analyzing {country}...")
-            print(f"{'='*50}")
+        result = self.analyze_from_2024_data()
+        if result is not None:
+            results_df, df_gen, df_load, df_flows = result
             
-            result = self.analyze_renewable_integration(df, country)
-            if result:
-                results.append(result)
+            if len(results_df) == 0:
+                print("\nNo results from 2024 data.")
+                sys.exit(1)
+            else:
+                print("\n" + "="*100)
+                print("EUROPEAN RENEWABLE INTEGRATION SUMMARY 2024 - ALL COUNTRIES")
+                print("="*100)
+                print(f"\n{'Country':<6} {'Load':>12} {'Renewable':>12} {'Ren%':>6} {'Nuclear':>10} {'Nuc%':>5} {'Fossil':>10} {'Fos%':>5} {'NetImp':>10} {'Net%':>5}")
+                print("-"*100)
                 
-                print(f"\nRESULTS FOR {country}:")
-                print(f"   Total Load: {result['total_annual_load_gwh']:,.0f} GWh")
-                print(f"   Average Load: {result['avg_load_mw']:,.0f} MW")
-                print(f"   Renewable Share: {result['total_renewable_percent']:.1f}%")
-                print(f"   Nuclear Share: {result['total_nuclear_percent']:.1f}%")
-                print(f"   Fossil Share: {result['total_fossil_percent']:.1f}%")
+                for _, r in results_df.iterrows():
+                    print(f"{r['Country']:<6} {r['Load_GWh']:>12,} {r['Renewable_GWh']:>12,} {r['Renewable_Pct']:>5.1f}% "
+                          f"{r['Nuclear_GWh']:>10,} {r['Nuclear_Pct']:>4.1f}% {r['Fossil_GWh']:>10,} {r['Fossil_Pct']:>4.1f}% "
+                          f"{r['Net_Imports_GWh']:>10,} {r['Net_Imports_Pct']:>5.1f}%")
                 
-                emissions = self.calculate_emission_reductions(df, country)
-                if emissions:
-                    print(f"\n   CO2 EMISSIONS:")
-                    print(f"      Current: {emissions['current_emissions_tons']:,.0f} tons")
-                    print(f"      Avoided: {emissions['avoided_emissions_tons']:,.0f} tons")
-                    print(f"      Reduction: {emissions['reduction_percentage']:.1f}%")
-        
-        if results:
-            print(f"\n{'='*70}")
-            print("EUROPEAN RENEWABLE INTEGRATION SUMMARY - SYNTHETIC DATA")
-            print("="*70)
-            
-            summary_data = []
-            for r in results:
-                summary_data.append({
-                    'Country': r['country_code'],
-                    'Load_GWh': r['total_annual_load_gwh'],
-                    'Renewable_%': r['total_renewable_percent'],
-                    'Nuclear_%': r['total_nuclear_percent'],
-                    'Fossil_%': r['total_fossil_percent']
-                })
-            
-            summary_df = pd.DataFrame(summary_data)
-            summary_df = summary_df.sort_values('Renewable_%', ascending=False)
-            
-            print(f"\n{'Country':<8} {'Load_GWh':>12} {'Renewable%':>10} {'Nuclear%':>10} {'Fossil%':>10}")
-            print("-"*55)
-            for _, row in summary_df.iterrows():
-                print(f"{row['Country']:<8} {row['Load_GWh']:>12,} {row['Renewable_%']:>9.1f}% {row['Nuclear_%']:>9.1f}% {row['Fossil_%']:>9.1f}%")
-            
-            summary_df.to_csv('synthetic_analysis_results.csv', index=False)
-            print(f"\nResults saved to: synthetic_analysis_results.csv")
-            
-            fig, axes = plt.subplots(1, 2, figsize=(14, 6))
-            
-            x = np.arange(len(results))
-            width = 0.25
-            
-            renew_pcts = [r['total_renewable_percent'] for r in results]
-            nuclear_pcts = [r['total_nuclear_percent'] for r in results]
-            fossil_pcts = [r['total_fossil_percent'] for r in results]
-            countries_list = [r['country_code'] for r in results]
-            
-            axes[0].bar(x - width, renew_pcts, width, label='Renewable', color='#2ecc71')
-            axes[0].bar(x, nuclear_pcts, width, label='Nuclear', color='#f39c12')
-            axes[0].bar(x + width, fossil_pcts, width, label='Fossil', color='#e74c3c')
-            axes[0].set_xlabel('Country')
-            axes[0].set_ylabel('Share (%)')
-            axes[0].set_title('Energy Mix Comparison')
-            axes[0].set_xticks(x)
-            axes[0].set_xticklabels(countries_list)
-            axes[0].legend()
-            axes[0].axhline(y=50, color='green', linestyle='--', label='EU 2030 Target')
-            axes[0].grid(True, alpha=0.3, axis='y')
-            
-            loads = [r['total_annual_load_gwh'] / 1000 for r in results]
-            axes[1].bar(countries_list, loads, color=['#3498db', '#9b59b6', '#e67e22', '#1abc9c', '#e74c3c'])
-            axes[1].set_xlabel('Country')
-            axes[1].set_ylabel('Annual Load (TWh)')
-            axes[1].set_title('Total Annual Load')
-            axes[1].grid(True, alpha=0.3, axis='y')
-            
-            for bar, load in zip(axes[1].patches, loads):
-                axes[1].text(bar.get_x() + bar.get_width()/2, bar.get_height() + 5, f'{load:.0f} TWh', ha='center', fontsize=9)
-            
-            plt.tight_layout()
-            plt.savefig('synthetic_analysis_chart.png', dpi=150)
-            plt.show()
-            print("Chart saved to: synthetic_analysis_chart.png")
-            
-            print("\nCreating renewable mix chart for Germany...")
-            self.plot_renewable_mix(df, 'DE', 'germany_renewable_mix.png')
+                results_df.to_csv('renewable_integration_results_2024_all_countries.csv', index=False)
+                print("\nResults saved to: renewable_integration_results_2024_all_countries.csv")
+                
+                fig, ax = plt.subplots(figsize=(14, 10))
+                top15 = results_df.head(15)
+                colors = ['#2ecc71' if x >= 50 else '#f39c12' if x >= 30 else '#e74c3c' for x in top15['Renewable_Pct']]
+                ax.barh(top15['Country'], top15['Renewable_Pct'], color=colors)
+                ax.set_xlabel('Renewable Penetration (% of Load)', fontsize=12)
+                ax.set_title('Top 15 Countries - Renewable Energy Share 2024', fontsize=14, fontweight='bold')
+                for bar, pct in zip(ax.patches, top15['Renewable_Pct']):
+                    ax.text(bar.get_width() + 1, bar.get_y() + bar.get_height()/2, f'{pct:.1f}%', ha='left', va='center', fontsize=9)
+                ax.axvline(x=50, color='green', linestyle='--', label='50% Target')
+                ax.axvline(x=30, color='orange', linestyle='--', label='30% Baseline')
+                ax.legend()
+                ax.grid(True, alpha=0.3, axis='x')
+                plt.tight_layout()
+                plt.savefig('renewable_2024_chart_all_countries.png', dpi=150)
+                print("Chart saved to: renewable_2024_chart_all_countries.png")
+                
+                print("\n" + "="*60)
+                print("ANALYSIS COMPLETED SUCCESSFULLY")
+                print("="*60)
 
 
 if __name__ == "__main__":
     analyzer = RenewableIntegrationAnalyzer()
     analyzer.run_complete_analysis()
     
-    print(f"\n{'='*70}")
+    print("\n" + "="*70)
     print("ANALYSIS COMPLETED")
     print("="*70)
